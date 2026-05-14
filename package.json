@@ -1,0 +1,87 @@
+{
+  "name": "space3d",
+  "version": "1.0.0",
+  "description": "Space3D - 3D Model Viewer",
+  "main": "main.js",
+  "author": "Space3D",
+  "license": "MIT",
+  "scripts": {
+    "dev": "npm run build:renderer && electron .",
+    "start": "electron .",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && electron-builder --win --x64",
+    "build:dir": "npm run build:renderer && electron-builder --win --x64 --dir"
+  },
+  "keywords": [],
+  "devDependencies": {
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
+    "vite": "^8.0.13"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^9.7.0",
+    "@babylonjs/loaders": "^9.7.0",
+    "@babylonjs/materials": "^9.7.0",
+    "babylonjs": "^9.7.0",
+    "babylonjs-loaders": "^9.7.0",
+    "babylonjs-materials": "^9.7.0",
+    "three": "^0.184.0"
+  },
+  "build": {
+    "appId": "com.space3d.viewer",
+    "productName": "Space3D Viewer",
+    "copyright": "Copyright © 2026",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Space3D Viewer"
+    },
+    "fileAssociations": [
+      {
+        "ext": "glb",
+        "name": "GLB 3D Model",
+        "description": "GLTF Binary"
+      },
+      {
+        "ext": "gltf",
+        "name": "GLTF 3D Model",
+        "description": "GLTF"
+      },
+      {
+        "ext": "obj",
+        "name": "OBJ 3D Model",
+        "description": "Wavefront OBJ"
+      },
+      {
+        "ext": "fbx",
+        "name": "FBX 3D Model",
+        "description": "Autodesk FBX"
+      },
+      {
+        "ext": "stl",
+        "name": "STL 3D Model",
+        "description": "STereoLithography"
+      }
+    ]
+  }
+}
