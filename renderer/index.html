@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data: file:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: file:; media-src 'self' blob: data: file:; connect-src 'self' blob: data: file:; worker-src 'self' blob:;" />
@@ -53,6 +53,16 @@
     .btn.active { background: #e94560; border-color: #e94560; }
 
     .sep { width: 1px; height: 24px; background: #0f3460; margin: 0 4px; }
+
+    #lang-select {
+      background: #0f3460;
+      border: 1px solid #0f3460;
+      color: #e0e0e0;
+      border-radius: 4px;
+      font-size: 12px;
+      padding: 5px 8px;
+      outline: none;
+    }
 
     #file-label {
       font-size: 12px;
@@ -185,16 +195,20 @@
   <!-- Toolbar -->
   <div id="toolbar">
     <span class="logo">Space3D</span>
-    <button class="btn" id="btn-open">📂 打开文件</button>
+    <button class="btn" id="btn-open">📂 Open</button>
     <div class="sep"></div>
-    <button class="btn" id="btn-reset">⟳ 重置视角</button>
-    <button class="btn" id="btn-wireframe">⬡ 线框</button>
-    <button class="btn" id="btn-bg">◑ 背景</button>
-    <button class="btn" id="btn-grid">⊞ 网格</button>
-    <button class="btn" id="btn-axis">⟂ 坐标轴</button>
-    <button class="btn" id="btn-shadow">☀ 阴影</button>
+    <button class="btn" id="btn-reset">⟳ Reset</button>
+    <button class="btn" id="btn-wireframe">⬡ Wireframe</button>
+    <button class="btn" id="btn-bg">◑ Background</button>
+    <button class="btn" id="btn-grid">⊞ Grid</button>
+    <button class="btn" id="btn-axis">⟂ Axis</button>
+    <button class="btn" id="btn-shadow">☀ Shadows</button>
     <div class="sep"></div>
-    <span id="file-label">拖拽文件到窗口或点击"打开文件"</span>
+    <select id="lang-select" aria-label="Language">
+      <option value="en">English</option>
+      <option value="zh">中文</option>
+    </select>
+    <span id="file-label">Drop a file here or click Open</span>
   </div>
 
   <!-- Main -->
@@ -206,14 +220,14 @@
       <!-- Welcome -->
       <div id="welcome">
         <h2>Space3D Viewer</h2>
-        <p>拖拽3D模型文件到此处，或点击工具栏"打开文件"</p>
-        <p class="formats">支持格式：GLB · GLTF · OBJ · FBX · STL</p>
+        <p id="welcome-subtitle">Drop a 3D model here, or click Open in the toolbar</p>
+        <p class="formats" id="welcome-formats">Supported formats: GLB · GLTF · OBJ · FBX · STL</p>
       </div>
 
       <!-- Loading -->
       <div id="loading">
         <div class="spinner"></div>
-        <span>加载中...</span>
+        <span id="loading-text">Loading...</span>
       </div>
 
       <!-- Error -->
@@ -223,38 +237,38 @@
     <!-- Info panel -->
     <div id="info-panel">
       <div>
-        <h3>模型信息</h3>
-        <div class="info-row"><span>文件名</span><span id="info-name">-</span></div>
-        <div class="info-row"><span>格式</span><span id="info-format">-</span></div>
-        <div class="info-row"><span>网格数</span><span id="info-meshes">-</span></div>
-        <div class="info-row"><span>顶点数</span><span id="info-vertices">-</span></div>
-        <div class="info-row"><span>材质数</span><span id="info-materials">-</span></div>
-        <div class="info-row"><span>动画数</span><span id="info-animations">-</span></div>
+        <h3 id="panel-model-info">Model Info</h3>
+        <div class="info-row"><span id="label-filename">File</span><span id="info-name">-</span></div>
+        <div class="info-row"><span id="label-format">Format</span><span id="info-format">-</span></div>
+        <div class="info-row"><span id="label-meshes">Meshes</span><span id="info-meshes">-</span></div>
+        <div class="info-row"><span id="label-vertices">Vertices</span><span id="info-vertices">-</span></div>
+        <div class="info-row"><span id="label-materials">Materials</span><span id="info-materials">-</span></div>
+        <div class="info-row"><span id="label-animations">Animations</span><span id="info-animations">-</span></div>
       </div>
       <div>
-        <h3>操作说明</h3>
-        <div style="color:#888;line-height:1.8;font-size:12px;">
-          左键拖动：旋转<br/>
-          右键拖动：平移<br/>
-          滚轮：缩放<br/>
-          Ctrl+O：打开文件<br/>
-          Ctrl+R：重置视角<br/>
-          Ctrl+W：线框模式<br/>
-          Ctrl+B：切换背景
-          Ctrl+G：切换网格
+        <h3 id="panel-controls">Controls</h3>
+        <div id="controls-help" style="color:#888;line-height:1.8;font-size:12px;">
+          Left drag: Rotate<br/>
+          Right drag: Pan<br/>
+          Mouse wheel: Zoom<br/>
+          Ctrl+O: Open file<br/>
+          Ctrl+R: Reset view<br/>
+          Ctrl+W: Wireframe<br/>
+          Ctrl+B: Background<br/>
+          Ctrl+G: Grid
         </div>
       </div>
       <div>
-        <h3>动画</h3>
+        <h3 id="panel-animations">Animations</h3>
         <div id="anim-controls" style="display:flex;flex-direction:column;gap:6px;">
-          <span style="color:#555;font-size:12px;">无动画</span>
+          <span style="color:#555;font-size:12px;" id="anim-empty">No animations</span>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Drop overlay -->
-  <div id="drop-overlay"><span>松开以加载模型</span></div>
+  <div id="drop-overlay"><span id="drop-text">Drop to load model</span></div>
 
   <script type="module" src="../src/viewer.js"></script>
 </body>

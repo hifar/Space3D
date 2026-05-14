@@ -36,11 +36,31 @@ const welcomeEl     = document.getElementById('welcome');
 const loadingEl     = document.getElementById('loading');
 const errorEl       = document.getElementById('error-msg');
 const fileLabelEl   = document.getElementById('file-label');
+const langSelectEl  = document.getElementById('lang-select');
 const animControls  = document.getElementById('anim-controls');
+const btnOpen       = document.getElementById('btn-open');
+const btnReset      = document.getElementById('btn-reset');
 const btnWireframe  = document.getElementById('btn-wireframe');
 const btnBg         = document.getElementById('btn-bg');
 const btnGrid       = document.getElementById('btn-grid');
 const btnAxis       = document.getElementById('btn-axis');
+const btnShadow     = document.getElementById('btn-shadow');
+
+const welcomeSubtitleEl = document.getElementById('welcome-subtitle');
+const welcomeFormatsEl = document.getElementById('welcome-formats');
+const loadingTextEl = document.getElementById('loading-text');
+const panelModelInfoEl = document.getElementById('panel-model-info');
+const panelControlsEl = document.getElementById('panel-controls');
+const panelAnimationsEl = document.getElementById('panel-animations');
+const labelFilenameEl = document.getElementById('label-filename');
+const labelFormatEl = document.getElementById('label-format');
+const labelMeshesEl = document.getElementById('label-meshes');
+const labelVerticesEl = document.getElementById('label-vertices');
+const labelMaterialsEl = document.getElementById('label-materials');
+const labelAnimationsEl = document.getElementById('label-animations');
+const controlsHelpEl = document.getElementById('controls-help');
+const animEmptyEl = document.getElementById('anim-empty');
+const dropTextEl = document.getElementById('drop-text');
 
 const infoName      = document.getElementById('info-name');
 const infoFormat    = document.getElementById('info-format');
@@ -70,6 +90,8 @@ let gridMesh         = null;
 let skyboxMesh       = null;
 let worldAxisRoot    = null;
 let localAxisRoot    = null;
+let currentLanguage  = 'en';
+let fileLabelIsDefault = true;
 
 const CAMERA_DEFAULT_ALPHA = Math.PI / 2;
 const CAMERA_DEFAULT_BETA = Math.PI / 3;
@@ -78,6 +100,116 @@ const MAIN_LAYER_MASK = 0x0FFFFFFF;
 const GIZMO_LAYER_MASK = 0x10000000;
 const WORLD_AXIS_BASE_LENGTH = 1.2;
 const LOCAL_AXIS_BASE_LENGTH = 1.0;
+
+const i18n = {
+  en: {
+    btnOpen: '📂 Open',
+    btnReset: '⟳ Reset',
+    btnWireframe: '⬡ Wireframe',
+    btnBackground: '◑ Background',
+    btnGrid: '⊞ Grid',
+    btnAxis: '⟂ Axis',
+    btnShadows: '☀ Shadows',
+    fileHint: 'Drop a file here or click Open',
+    welcomeSubtitle: 'Drop a 3D model here, or click Open in the toolbar',
+    welcomeFormats: 'Supported formats: GLB · GLTF · OBJ · FBX · STL',
+    loading: 'Loading...',
+    modelInfo: 'Model Info',
+    controls: 'Controls',
+    animations: 'Animations',
+    filename: 'File',
+    format: 'Format',
+    meshes: 'Meshes',
+    vertices: 'Vertices',
+    materials: 'Materials',
+    animationCount: 'Animations',
+    controlsHelp: 'Left drag: Rotate<br/>Right drag: Pan<br/>Mouse wheel: Zoom<br/>Ctrl+O: Open file<br/>Ctrl+R: Reset view<br/>Ctrl+W: Wireframe<br/>Ctrl+B: Background<br/>Ctrl+G: Grid',
+    noAnimations: 'No animations',
+    dropText: 'Drop to load model',
+    loadFailedPrefix: 'Load failed: ',
+    unsupportedFormat: 'Unsupported format:',
+    supportedFormats: 'Supported: GLB GLTF OBJ FBX STL',
+    unnamedAnimation: 'Animation',
+    fbxAnimationNote: '(FBX animation requires conversion)',
+  },
+  zh: {
+    btnOpen: '📂 打开文件',
+    btnReset: '⟳ 重置视角',
+    btnWireframe: '⬡ 线框',
+    btnBackground: '◑ 背景',
+    btnGrid: '⊞ 网格',
+    btnAxis: '⟂ 坐标轴',
+    btnShadows: '☀ 阴影',
+    fileHint: '拖拽文件到窗口或点击"打开文件"',
+    welcomeSubtitle: '拖拽3D模型文件到此处，或点击工具栏"打开文件"',
+    welcomeFormats: '支持格式：GLB · GLTF · OBJ · FBX · STL',
+    loading: '加载中...',
+    modelInfo: '模型信息',
+    controls: '操作说明',
+    animations: '动画',
+    filename: '文件名',
+    format: '格式',
+    meshes: '网格数',
+    vertices: '顶点数',
+    materials: '材质数',
+    animationCount: '动画数',
+    controlsHelp: '左键拖动：旋转<br/>右键拖动：平移<br/>滚轮：缩放<br/>Ctrl+O：打开文件<br/>Ctrl+R：重置视角<br/>Ctrl+W：线框模式<br/>Ctrl+B：切换背景<br/>Ctrl+G：切换网格',
+    noAnimations: '无动画',
+    dropText: '松开以加载模型',
+    loadFailedPrefix: '加载失败: ',
+    unsupportedFormat: '不支持的格式:',
+    supportedFormats: '支持: GLB GLTF OBJ FBX STL',
+    unnamedAnimation: '动画',
+    fbxAnimationNote: '(FBX动画需转换)',
+  },
+};
+
+function t(key) {
+  const dict = i18n[currentLanguage] || i18n.en;
+  return dict[key] || key;
+}
+
+function applyLanguage(lang) {
+  currentLanguage = lang === 'zh' ? 'zh' : 'en';
+  document.documentElement.lang = currentLanguage === 'zh' ? 'zh-CN' : 'en';
+  langSelectEl.value = currentLanguage;
+
+  btnOpen.textContent = t('btnOpen');
+  btnReset.textContent = t('btnReset');
+  btnWireframe.textContent = t('btnWireframe');
+  btnBg.textContent = t('btnBackground');
+  btnGrid.textContent = t('btnGrid');
+  btnAxis.textContent = t('btnAxis');
+  btnShadow.textContent = t('btnShadows');
+
+  if (fileLabelIsDefault) fileLabelEl.textContent = t('fileHint');
+  welcomeSubtitleEl.textContent = t('welcomeSubtitle');
+  welcomeFormatsEl.textContent = t('welcomeFormats');
+  loadingTextEl.textContent = t('loading');
+  panelModelInfoEl.textContent = t('modelInfo');
+  panelControlsEl.textContent = t('controls');
+  panelAnimationsEl.textContent = t('animations');
+  labelFilenameEl.textContent = t('filename');
+  labelFormatEl.textContent = t('format');
+  labelMeshesEl.textContent = t('meshes');
+  labelVerticesEl.textContent = t('vertices');
+  labelMaterialsEl.textContent = t('materials');
+  labelAnimationsEl.textContent = t('animationCount');
+  controlsHelpEl.innerHTML = t('controlsHelp');
+  if (animControls.children.length === 1 && animControls.firstElementChild?.id === 'anim-empty') {
+    animEmptyEl.textContent = t('noAnimations');
+  }
+  dropTextEl.textContent = t('dropText');
+}
+
+async function initLanguage() {
+  try {
+    const lang = await window.electronAPI.getLanguage();
+    applyLanguage(lang);
+  } catch {
+    applyLanguage('en');
+  }
+}
 
 /* ─────────────────────────────────────────────
    Create base scene
@@ -205,11 +337,26 @@ function syncWorldGizmoCamera() {
 }
 
 createScene();
+initLanguage();
 btnBg.classList.add('active');
 btnGrid.classList.add('active');
 btnAxis.classList.add('active');
 engine.runRenderLoop(() => { if (scene) scene.render(); });
 window.addEventListener('resize', () => engine.resize());
+
+langSelectEl.addEventListener('change', async () => {
+  const next = langSelectEl.value === 'zh' ? 'zh' : 'en';
+  try {
+    const applied = await window.electronAPI.setLanguage(next);
+    applyLanguage(applied);
+  } catch {
+    applyLanguage(next);
+  }
+});
+
+window.electronAPI.onSetLanguage((lang) => {
+  applyLanguage(lang);
+});
 
 /* ─────────────────────────────────────────────
    Bounds helpers
@@ -260,6 +407,7 @@ async function loadModel(filePath) {
   const ext      = fileName.split('.').pop().toLowerCase();
 
   fileLabelEl.textContent  = fileName;
+  fileLabelIsDefault = false;
   welcomeEl.classList.add('hidden');
   infoName.textContent     = fileName;
   infoFormat.textContent   = ext.toUpperCase();
@@ -273,7 +421,7 @@ async function loadModel(filePath) {
     showLoading(false);
   } catch (err) {
     showLoading(false);
-    showError('加载失败: ' + (err.message || err));
+    showError(t('loadFailedPrefix') + (err.message || err));
     console.error(err);
   }
 }
@@ -384,7 +532,7 @@ function loadFBX(filePath) {
           infoAnimations.textContent = (fbxObj.animations && fbxObj.animations.length) || 0;
 
           if (fbxObj.animations && fbxObj.animations.length > 0) {
-            infoAnimations.textContent = fbxObj.animations.length + ' (FBX动画需转换)';
+            infoAnimations.textContent = `${fbxObj.animations.length} ${t('fbxAnimationNote')}`;
           }
 
           resolve();
@@ -467,7 +615,7 @@ function buildAnimControls(groups) {
     row.style.cssText = 'display:flex;align-items:center;gap:6px;';
 
     const lbl = document.createElement('span');
-    lbl.textContent = g.name || `动画 ${i + 1}`;
+    lbl.textContent = g.name || `${t('unnamedAnimation')} ${i + 1}`;
     lbl.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#aaa;';
 
     const btn = document.createElement('button');
@@ -494,7 +642,7 @@ function buildAnimControls(groups) {
 }
 
 function clearAnimControls() {
-  animControls.innerHTML = '<span style="color:#555;font-size:12px;">无动画</span>';
+  animControls.innerHTML = `<span style="color:#555;font-size:12px;" id="anim-empty">${t('noAnimations')}</span>`;
   infoMeshes.textContent = infoVertices.textContent = infoMaterials.textContent = infoAnimations.textContent = '-';
 }
 
@@ -508,12 +656,12 @@ function hideError()     { errorEl.classList.remove('visible'); }
 /* ─────────────────────────────────────────────
    Toolbar
 ───────────────────────────────────────────── */
-document.getElementById('btn-open').addEventListener('click', async () => {
+btnOpen.addEventListener('click', async () => {
   const fp = await window.electronAPI.openFileDialog();
   if (fp) loadModel(fp);
 });
 
-document.getElementById('btn-reset').addEventListener('click', () => {
+btnReset.addEventListener('click', () => {
   if (currentMeshes.length) fitCamera(currentMeshes);
 });
 
@@ -543,7 +691,7 @@ btnAxis.addEventListener('click', () => {
   if (localAxisRoot) localAxisRoot.setEnabled(axisOn && currentMeshes.length > 0);
 });
 
-document.getElementById('btn-shadow').addEventListener('click', (e) => {
+btnShadow.addEventListener('click', (e) => {
   const btn = e.currentTarget;
   const shadowsVisible = btn.dataset.on !== '0';
   if (shadowsVisible) {
@@ -596,7 +744,7 @@ document.addEventListener('drop', e => {
   if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
   if (!['glb', 'gltf', 'obj', 'fbx', 'stl'].includes(ext)) {
-    showError('不支持的格式: .' + ext + '  (支持: GLB GLTF OBJ FBX STL)');
+    showError(`${t('unsupportedFormat')} .${ext} (${t('supportedFormats')})`);
     return;
   }
   loadModel(file.path);

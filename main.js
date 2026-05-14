@@ -3,6 +3,7 @@ const path = require('path');
 
 let mainWindow;
 let pendingModelPath = null;
+let appLanguage = 'en';
 
 const supportedExtensions = new Set(['.glb', '.gltf', '.obj', '.fbx', '.stl']);
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -81,6 +82,10 @@ function createWindow() {
 
   buildMenu();
 
+  mainWindow.webContents.once('did-finish-load', () => {
+    mainWindow.webContents.send('set-language', appLanguage);
+  });
+
   if (pendingModelPath) {
     const filePath = pendingModelPath;
     pendingModelPath = null;
@@ -90,58 +95,136 @@ function createWindow() {
   }
 }
 
+const i18n = {
+  en: {
+    menuFile: 'File',
+    menuOpen: 'Open Model...',
+    menuExit: 'Exit',
+    menuView: 'View',
+    menuResetCamera: 'Reset Camera',
+    menuToggleWireframe: 'Toggle Wireframe',
+    menuToggleBackground: 'Toggle Background',
+    menuFullscreen: 'Fullscreen',
+    menuDevTools: 'Developer Tools',
+    menuLanguage: 'Language',
+    langEnglish: 'English',
+    langChinese: 'Chinese',
+    menuHelp: 'Help',
+    menuAbout: 'About',
+    aboutTitle: 'About Space3D Viewer',
+    aboutDetail: 'Version: 1.0.0\nBuilt with BabylonJS + Electron\nFormats: GLB, GLTF, OBJ, FBX, STL',
+    dialogOpenTitle: 'Open 3D Model',
+    dialogModelFilter: '3D Models',
+    dialogAllFiles: 'All Files',
+  },
+  zh: {
+    menuFile: '文件',
+    menuOpen: '打开模型...',
+    menuExit: '退出',
+    menuView: '视图',
+    menuResetCamera: '重置相机',
+    menuToggleWireframe: '切换线框模式',
+    menuToggleBackground: '切换背景',
+    menuFullscreen: '全屏',
+    menuDevTools: '开发者工具',
+    menuLanguage: '语言',
+    langEnglish: '英文',
+    langChinese: '中文',
+    menuHelp: '帮助',
+    menuAbout: '关于',
+    aboutTitle: '关于 Space3D Viewer',
+    aboutDetail: '版本: 1.0.0\n基于 BabylonJS + Electron\n支持格式: GLB, GLTF, OBJ, FBX, STL',
+    dialogOpenTitle: '打开3D模型文件',
+    dialogModelFilter: '3D模型',
+    dialogAllFiles: '所有文件',
+  },
+};
+
+function t(key) {
+  const dict = i18n[appLanguage] || i18n.en;
+  return dict[key] || key;
+}
+
+function setLanguage(lang) {
+  const next = lang === 'zh' ? 'zh' : 'en';
+  if (appLanguage === next) return;
+  appLanguage = next;
+  buildMenu();
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('set-language', appLanguage);
+  }
+}
+
 function buildMenu() {
   const template = [
     {
-      label: '文件',
+      label: t('menuFile'),
       submenu: [
         {
-          label: '打开模型...',
+          label: t('menuOpen'),
           accelerator: 'CmdOrCtrl+O',
           click: () => openFileDialog(),
         },
         { type: 'separator' },
         {
-          label: '退出',
+          label: t('menuExit'),
           accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Alt+F4',
           click: () => app.quit(),
         },
       ],
     },
     {
-      label: '视图',
+      label: t('menuView'),
       submenu: [
         {
-          label: '重置相机',
+          label: t('menuResetCamera'),
           accelerator: 'CmdOrCtrl+R',
           click: () => mainWindow && mainWindow.webContents.send('reset-camera'),
         },
         {
-          label: '切换线框模式',
+          label: t('menuToggleWireframe'),
           accelerator: 'CmdOrCtrl+W',
           click: () => mainWindow && mainWindow.webContents.send('toggle-wireframe'),
         },
         {
-          label: '切换背景',
+          label: t('menuToggleBackground'),
           accelerator: 'CmdOrCtrl+B',
           click: () => mainWindow && mainWindow.webContents.send('toggle-background'),
         },
         { type: 'separator' },
-        { role: 'togglefullscreen', label: '全屏' },
-        { role: 'toggleDevTools', label: '开发者工具' },
+        {
+          label: t('menuLanguage'),
+          submenu: [
+            {
+              label: t('langEnglish'),
+              type: 'radio',
+              checked: appLanguage === 'en',
+              click: () => setLanguage('en'),
+            },
+            {
+              label: t('langChinese'),
+              type: 'radio',
+              checked: appLanguage === 'zh',
+              click: () => setLanguage('zh'),
+            },
+          ],
+        },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: t('menuFullscreen') },
+        { role: 'toggleDevTools', label: t('menuDevTools') },
       ],
     },
     {
-      label: '帮助',
+      label: t('menuHelp'),
       submenu: [
         {
-          label: '关于',
+          label: t('menuAbout'),
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: '关于 Space3D Viewer',
+              title: t('aboutTitle'),
               message: 'Space3D Viewer',
-              detail: '版本: 1.0.0\n基于 BabylonJS + Electron\n支持格式: GLB, GLTF, OBJ, FBX, STL',
+              detail: t('aboutDetail'),
             });
           },
         },
@@ -154,13 +237,13 @@ function buildMenu() {
 async function openFileDialog() {
   if (!mainWindow) return;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '打开3D模型文件',
+    title: t('dialogOpenTitle'),
     filters: [
       {
-        name: '3D模型',
+        name: t('dialogModelFilter'),
         extensions: ['glb', 'gltf', 'obj', 'fbx', 'stl'],
       },
-      { name: '所有文件', extensions: ['*'] },
+      { name: t('dialogAllFiles'), extensions: ['*'] },
     ],
     properties: ['openFile'],
   });
@@ -173,13 +256,13 @@ async function openFileDialog() {
 ipcMain.handle('open-file-dialog', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '打开3D模型文件',
+    title: t('dialogOpenTitle'),
     filters: [
       {
-        name: '3D模型',
+        name: t('dialogModelFilter'),
         extensions: ['glb', 'gltf', 'obj', 'fbx', 'stl'],
       },
-      { name: '所有文件', extensions: ['*'] },
+      { name: t('dialogAllFiles'), extensions: ['*'] },
     ],
     properties: ['openFile'],
   });
@@ -187,6 +270,13 @@ ipcMain.handle('open-file-dialog', async () => {
     return result.filePaths[0];
   }
   return null;
+});
+
+ipcMain.handle('get-language', async () => appLanguage);
+
+ipcMain.handle('set-language', async (_event, lang) => {
+  setLanguage(lang);
+  return appLanguage;
 });
 
 app.whenReady().then(() => {

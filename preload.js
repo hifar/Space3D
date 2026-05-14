@@ -6,4 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onResetCamera: (callback) => ipcRenderer.on('reset-camera', () => callback()),
   onToggleWireframe: (callback) => ipcRenderer.on('toggle-wireframe', () => callback()),
   onToggleBackground: (callback) => ipcRenderer.on('toggle-background', () => callback()),
+  getLanguage: () => ipcRenderer.invoke('get-language'),
+  setLanguage: (lang) => ipcRenderer.invoke('set-language', lang),
+  onSetLanguage: (callback) => ipcRenderer.on('set-language', (_event, lang) => callback(lang)),
 });
