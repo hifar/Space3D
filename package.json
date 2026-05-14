@@ -81,6 +81,11 @@
         "ext": "stl",
         "name": "STL 3D Model",
         "description": "STereoLithography"
+      },
+      {
+        "ext": "ply",
+        "name": "PLY 3D Model",
+        "description": "Polygon File Format / Point Cloud"
       }
     ]
   }

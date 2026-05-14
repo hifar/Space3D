@@ -5,7 +5,7 @@ let mainWindow;
 let pendingModelPath = null;
 let appLanguage = 'en';
 
-const supportedExtensions = new Set(['.glb', '.gltf', '.obj', '.fbx', '.stl']);
+const supportedExtensions = new Set(['.glb', '.gltf', '.obj', '.fbx', '.stl', '.ply']);
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 // Ensure local file:// model resources (textures/buffers) are readable when running offline.
@@ -112,7 +112,7 @@ const i18n = {
     menuHelp: 'Help',
     menuAbout: 'About',
     aboutTitle: 'About Space3D Viewer',
-    aboutDetail: 'Version: 1.0.0\nBuilt with BabylonJS + Electron\nFormats: GLB, GLTF, OBJ, FBX, STL',
+    aboutDetail: 'Version: 1.0.0\nBuilt with BabylonJS + Electron\nFormats: GLB, GLTF, OBJ, FBX, STL, PLY',
     dialogOpenTitle: 'Open 3D Model',
     dialogModelFilter: '3D Models',
     dialogAllFiles: 'All Files',
@@ -133,7 +133,7 @@ const i18n = {
     menuHelp: '帮助',
     menuAbout: '关于',
     aboutTitle: '关于 Space3D Viewer',
-    aboutDetail: '版本: 1.0.0\n基于 BabylonJS + Electron\n支持格式: GLB, GLTF, OBJ, FBX, STL',
+    aboutDetail: '版本: 1.0.0\n基于 BabylonJS + Electron\n支持格式: GLB, GLTF, OBJ, FBX, STL, PLY',
     dialogOpenTitle: '打开3D模型文件',
     dialogModelFilter: '3D模型',
     dialogAllFiles: '所有文件',
@@ -241,7 +241,7 @@ async function openFileDialog() {
     filters: [
       {
         name: t('dialogModelFilter'),
-        extensions: ['glb', 'gltf', 'obj', 'fbx', 'stl'],
+        extensions: ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply'],
       },
       { name: t('dialogAllFiles'), extensions: ['*'] },
     ],
@@ -260,7 +260,7 @@ ipcMain.handle('open-file-dialog', async () => {
     filters: [
       {
         name: t('dialogModelFilter'),
-        extensions: ['glb', 'gltf', 'obj', 'fbx', 'stl'],
+        extensions: ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply'],
       },
       { name: t('dialogAllFiles'), extensions: ['*'] },
     ],

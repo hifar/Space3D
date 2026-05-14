@@ -6,6 +6,7 @@
  *   OBJ         –  BabylonJS OBJ loader (native)
  *   STL         –  BabylonJS STL loader (native)
  *   FBX         –  Three.js FBXLoader → vertex bridge → BabylonJS mesh
+ *   PLY         –  Three.js PLYLoader → BabylonJS mesh / point cloud
  */
 
 import {
@@ -27,6 +28,7 @@ import '@babylonjs/loaders/STL/index';
 // Three.js for FBX
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 
 /* ─────────────────────────────────────────────
    DOM refs
@@ -112,7 +114,7 @@ const i18n = {
     btnShadows: '☀ Shadows',
     fileHint: 'Drop a file here or click Open',
     welcomeSubtitle: 'Drop a 3D model here, or click Open in the toolbar',
-    welcomeFormats: 'Supported formats: GLB · GLTF · OBJ · FBX · STL',
+    welcomeFormats: 'Supported formats: GLB · GLTF · OBJ · FBX · STL · PLY',
     loading: 'Loading...',
     modelInfo: 'Model Info',
     controls: 'Controls',
@@ -128,7 +130,7 @@ const i18n = {
     dropText: 'Drop to load model',
     loadFailedPrefix: 'Load failed: ',
     unsupportedFormat: 'Unsupported format:',
-    supportedFormats: 'Supported: GLB GLTF OBJ FBX STL',
+    supportedFormats: 'Supported: GLB GLTF OBJ FBX STL PLY',
     unnamedAnimation: 'Animation',
     fbxAnimationNote: '(FBX animation requires conversion)',
   },
@@ -142,7 +144,7 @@ const i18n = {
     btnShadows: '☀ 阴影',
     fileHint: '拖拽文件到窗口或点击"打开文件"',
     welcomeSubtitle: '拖拽3D模型文件到此处，或点击工具栏"打开文件"',
-    welcomeFormats: '支持格式：GLB · GLTF · OBJ · FBX · STL',
+    welcomeFormats: '支持格式：GLB · GLTF · OBJ · FBX · STL · PLY',
     loading: '加载中...',
     modelInfo: '模型信息',
     controls: '操作说明',
@@ -158,7 +160,7 @@ const i18n = {
     dropText: '松开以加载模型',
     loadFailedPrefix: '加载失败: ',
     unsupportedFormat: '不支持的格式:',
-    supportedFormats: '支持: GLB GLTF OBJ FBX STL',
+    supportedFormats: '支持: GLB GLTF OBJ FBX STL PLY',
     unnamedAnimation: '动画',
     fbxAnimationNote: '(FBX动画需转换)',
   },
@@ -415,6 +417,8 @@ async function loadModel(filePath) {
   try {
     if (ext === 'fbx') {
       await loadFBX(filePath);
+    } else if (ext === 'ply') {
+      await loadPLY(filePath);
     } else {
       await loadBabylon(filePath, fileName, ext);
     }
@@ -538,6 +542,94 @@ function loadFBX(filePath) {
           resolve();
         } catch (e) {
           reject(e);
+        }
+      },
+      undefined,
+      reject
+    );
+  });
+}
+
+function loadPLY(filePath) {
+  return new Promise((resolve, reject) => {
+    const loader = new PLYLoader();
+    const url = 'file:///' + filePath.replace(/\\/g, '/');
+
+    loader.load(
+      url,
+      (geometry) => {
+        try {
+          geometry.computeVertexNormals();
+
+          const posAttr = geometry.getAttribute('position');
+          if (!posAttr || posAttr.count === 0) {
+            throw new Error('PLY has no vertex positions');
+          }
+
+          const normalsAttr = geometry.getAttribute('normal');
+          const colorAttr = geometry.getAttribute('color');
+          const uvAttr = geometry.getAttribute('uv');
+          const indexAttr = geometry.getIndex();
+
+          const babylonMesh = new Mesh('ply_mesh_0', scene);
+          const vertexData = new VertexData();
+          vertexData.positions = Array.from(posAttr.array);
+
+          if (normalsAttr) vertexData.normals = Array.from(normalsAttr.array);
+          if (uvAttr) vertexData.uvs = Array.from(uvAttr.array);
+
+          if (colorAttr) {
+            const colors = [];
+            const src = colorAttr.array;
+            for (let i = 0; i < src.length; i += 3) {
+              colors.push(src[i], src[i + 1], src[i + 2], 1.0);
+            }
+            vertexData.colors = colors;
+          }
+
+          if (indexAttr) {
+            vertexData.indices = Array.from(indexAttr.array);
+          } else {
+            const indices = [];
+            for (let i = 0; i < posAttr.count; i++) indices.push(i);
+            vertexData.indices = indices;
+          }
+
+          vertexData.applyToMesh(babylonMesh);
+
+          const mat = new StandardMaterial('ply_mat_0', scene);
+          mat.diffuseColor = new Color3(0.85, 0.85, 0.9);
+          mat.backFaceCulling = false;
+
+          if (!indexAttr) {
+            // Vertex-only PLY is treated as point cloud.
+            mat.pointsCloud = true;
+            mat.pointSize = 2.0;
+            mat.disableLighting = true;
+            mat.emissiveColor = new Color3(1, 1, 1);
+          }
+
+          babylonMesh.material = mat;
+          babylonMesh.material.wireframe = wireframeOn;
+          babylonMesh.receiveShadows = !!indexAttr;
+          if (indexAttr) {
+            shadowGenerator.addShadowCaster(babylonMesh, true);
+          }
+
+          currentMeshes.push(babylonMesh);
+
+          fitCamera(currentMeshes);
+          adjustGrid(currentMeshes);
+          updateLocalAxes(currentMeshes);
+
+          infoMeshes.textContent = '1';
+          infoVertices.textContent = posAttr.count.toLocaleString();
+          infoMaterials.textContent = '1';
+          infoAnimations.textContent = '0';
+
+          resolve();
+        } catch (err) {
+          reject(err);
         }
       },
       undefined,
@@ -743,7 +835,7 @@ document.addEventListener('drop', e => {
   const file = e.dataTransfer.files[0];
   if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
-  if (!['glb', 'gltf', 'obj', 'fbx', 'stl'].includes(ext)) {
+  if (!['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply'].includes(ext)) {
     showError(`${t('unsupportedFormat')} .${ext} (${t('supportedFormats')})`);
     return;
   }
