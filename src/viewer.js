@@ -310,20 +310,24 @@ function adjustGrid(meshes) {
   const valid = meshes.filter(m => m.getBoundingInfo);
   if (!valid.length) return;
 
-  let minY = 1e9, minXZ = 1e9;
+  let minY = 1e9;
+  let maxXZ = 0;
   valid.forEach(m => {
     try {
+      m.computeWorldMatrix(true);
       const bi = m.getBoundingInfo();
       if (bi.boundingBox.minimumWorld.y < minY) minY = bi.boundingBox.minimumWorld.y;
       const dx = bi.boundingBox.maximumWorld.x - bi.boundingBox.minimumWorld.x;
       const dz = bi.boundingBox.maximumWorld.z - bi.boundingBox.minimumWorld.z;
       const d  = Math.max(dx, dz);
-      if (d > minXZ) minXZ = d;
+      if (d > maxXZ) maxXZ = d;
     } catch (_) {}
   });
 
-  gridMesh.position.y = Math.min(minY - 0.001, 0);
-  const s = (minXZ * 3) / 20;
+  // Keep grid slightly below model base to prevent z-fighting shimmer.
+  const epsilon = Math.max(maxXZ * 0.001, 0.01);
+  gridMesh.position.y = Math.min(minY - epsilon, 0);
+  const s = (maxXZ * 3) / 20;
   gridMesh.scaling.set(s || 1, 1, s || 1);
 }
 
