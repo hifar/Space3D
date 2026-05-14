@@ -12,8 +12,9 @@
 import {
   Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight,
   ShadowGenerator, Vector3, Color3, Color4, MeshBuilder, VertexData,
-  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport, Quaternion,
+  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport,
 } from '@babylonjs/core';
+import { Texture } from '@babylonjs/core/Materials/Textures/texture';
 
 import { GridMaterial } from '@babylonjs/materials/grid/gridMaterial';
 import { SkyMaterial } from '@babylonjs/materials/sky/skyMaterial';
@@ -247,6 +248,8 @@ function createScene() {
 
   shadowGenerator = new ShadowGenerator(2048, dir);
   shadowGenerator.useBlurExponentialShadowMap = true;
+  shadowGenerator.bias       = 0.01;
+  shadowGenerator.normalBias = 0.05;
 
   createSkybox();
   createWorldAxisGizmo();
@@ -475,7 +478,7 @@ function loadFBX(filePath) {
 
     loader.load(
       url,
-      (fbxObj) => {
+      async (fbxObj) => {
         try {
           fbxObj.updateMatrixWorld(true);
 
@@ -483,56 +486,82 @@ function loadFBX(filePath) {
           let meshCount  = 0;
           let matCount   = 0;
 
-          const worldPos = new THREE.Vector3();
-          const worldQuat = new THREE.Quaternion();
-          const worldScale = new THREE.Vector3();
+          const fbxDir = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
 
+          // Collect mesh nodes first; traverse is sync so we can't await inside it.
+          const meshNodes = [];
           fbxObj.traverse((child) => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const geom = child.geometry;
-            if (!geom) return;
+            if (child instanceof THREE.Mesh) meshNodes.push(child);
+          });
 
-            geom.computeVertexNormals();
+          for (const child of meshNodes) {
+            const geom = child.geometry?.clone();
+            if (!geom) continue;
+
+            // Bake world transform (includes FBX Z-up→Y-up correction at root).
+            geom.applyMatrix4(child.matrixWorld);
+
             const posAttr = geom.getAttribute('position');
-            if (!posAttr || posAttr.count === 0) return;
+            if (!posAttr || posAttr.count === 0) continue;
 
-            const positions = Array.from(posAttr.array);
-            const normAttr  = geom.getAttribute('normal');
-            const normals   = normAttr ? Array.from(normAttr.array) : [];
-            const uvAttr    = geom.getAttribute('uv');
-            const uvs       = uvAttr ? Array.from(uvAttr.array) : [];
-            const indexBuf  = geom.index;
-            const indices   = indexBuf ? Array.from(indexBuf.array) : null;
+            // ── Coordinate system fix ────────────────────────────────────────
+            // Three.js is right-handed; Babylon.js is left-handed.
+            // Negate Z on positions so geometry ends up in Babylon world space.
+            const rawPos = posAttr.array;
+            const positions = new Array(rawPos.length);
+            for (let i = 0; i < rawPos.length; i += 3) {
+              positions[i]     =  rawPos[i];
+              positions[i + 1] =  rawPos[i + 1];
+              positions[i + 2] = -rawPos[i + 2];
+            }
+
+            // Recompute normals AFTER position flip so they point the right way.
+            geom.computeVertexNormals();
+            const normAttr = geom.getAttribute('normal');
+            let normals = [];
+            if (normAttr) {
+              const rawNorm = normAttr.array;
+              normals = new Array(rawNorm.length);
+              for (let i = 0; i < rawNorm.length; i += 3) {
+                normals[i]     =  rawNorm[i];
+                normals[i + 1] =  rawNorm[i + 1];
+                normals[i + 2] = -rawNorm[i + 2];
+              }
+            }
+
+            const uvAttr = geom.getAttribute('uv');
+            const uvs = uvAttr ? Array.from(uvAttr.array) : [];
+
+            // Reverse winding order to compensate for the Z-flip handedness change.
+            const indexBuf = geom.index;
+            let indices;
+            if (indexBuf) {
+              const src = indexBuf.array;
+              indices = new Array(src.length);
+              for (let i = 0; i < src.length; i += 3) {
+                indices[i]     = src[i];
+                indices[i + 1] = src[i + 2];
+                indices[i + 2] = src[i + 1];
+              }
+            } else {
+              indices = [];
+              for (let i = 0; i < posAttr.count; i++) indices.push(i);
+            }
+            // ─────────────────────────────────────────────────────────────────
 
             const babylonMesh = new Mesh('fbx_mesh_' + meshCount, scene);
             const vertexData  = new VertexData();
             vertexData.positions = positions;
             if (normals.length) vertexData.normals = normals;
             if (uvs.length)     vertexData.uvs = uvs;
-
-            // Non-indexed FBX mesh still needs triangle indices for Babylon.
-            if (indices) {
-              vertexData.indices = indices;
-            } else {
-              const autoIndices = [];
-              for (let i = 0; i < posAttr.count; i++) autoIndices.push(i);
-              vertexData.indices = autoIndices;
-            }
+            vertexData.indices = indices;
             vertexData.applyToMesh(babylonMesh);
 
             const mat = new StandardMaterial('fbx_mat_' + meshCount, scene);
             const threeMat = Array.isArray(child.material) ? child.material[0] : child.material;
-            if (threeMat && threeMat.color) {
-              mat.diffuseColor = new Color3(threeMat.color.r, threeMat.color.g, threeMat.color.b);
-            }
-            mat.backFaceCulling = false;
+            await applyThreeMaterialToBabylonAsync(threeMat, mat, fbxDir);
             babylonMesh.material = mat;
             babylonMesh.material.wireframe = wireframeOn;
-
-            child.matrixWorld.decompose(worldPos, worldQuat, worldScale);
-            babylonMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
-            babylonMesh.scaling.set(worldScale.x, worldScale.y, worldScale.z);
-            babylonMesh.rotationQuaternion = new Quaternion(worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w);
 
             shadowGenerator.addShadowCaster(babylonMesh, true);
             babylonMesh.receiveShadows = true;
@@ -541,7 +570,7 @@ function loadFBX(filePath) {
             totalVerts += posAttr.count;
             meshCount++;
             matCount++;
-          });
+          }
 
           fitCamera(currentMeshes);
           adjustGrid(currentMeshes);
@@ -565,6 +594,127 @@ function loadFBX(filePath) {
       reject
     );
   });
+}
+
+// Fetch a blob: or file: URL and convert it to a base64 data: URL via FileReader.
+// This avoids canvas-taint security errors entirely.
+async function urlToDataUrl(url) {
+  if (!url) return null;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror   = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch { return null; }
+}
+
+// Canvas fallback – works when the image is loaded and the canvas is not tainted.
+function imageToDataUrl(image) {
+  if (!image) return null;
+  try {
+    const w = image.naturalWidth || image.videoWidth || image.width;
+    const h = image.naturalHeight || image.videoHeight || image.height;
+    if (!w || !h) return null;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(image, 0, 0, w, h);
+    return cv.toDataURL('image/png');
+  } catch { return null; }
+}
+
+async function createBabylonTextureAsync(threeTexture, fbxDir) {
+  if (!threeTexture) return null;
+
+  let dataUrl = null;
+
+  // 1. Fetch the source URL (blob: for embedded textures, file: for external) via FileReader.
+  //    This is the most reliable method – no canvas taint, works for both embedded & external.
+  const image = threeTexture.image;
+  if (image) {
+    const src = image.src || image.currentSrc || '';
+    if (src) dataUrl = await urlToDataUrl(src);
+    // 2. Canvas fallback if image is already fully decoded in memory.
+    if (!dataUrl) dataUrl = imageToDataUrl(image);
+  }
+
+  // 3. External texture search: FBX directory + common texture sub-folder names.
+  //    Handles textures in same dir, ./textures/, ./Textures/, etc.
+  if (!dataUrl) {
+    const raw = String(
+      threeTexture.name ||
+      threeTexture.userData?.filename ||
+      threeTexture.sourceFile ||
+      ''
+    );
+    const basename = raw.replace(/\\/g, '/').split('/').pop();
+    if (basename && fbxDir) {
+      const searchDirs = [
+        fbxDir,
+        fbxDir + '/textures',
+        fbxDir + '/Textures',
+        fbxDir + '/maps',
+        fbxDir + '/tex',
+        fbxDir + '/image',
+        fbxDir + '/images',
+      ];
+      for (const dir of searchDirs) {
+        dataUrl = await urlToDataUrl('file:///' + dir + '/' + basename);
+        if (dataUrl) break;
+      }
+    }
+  }
+
+  if (!dataUrl) return null;
+
+  const texture = new Texture(dataUrl, scene, false, false);
+  if (threeTexture.repeat) {
+    texture.uScale = threeTexture.repeat.x;
+    texture.vScale = threeTexture.repeat.y;
+  }
+  if (threeTexture.offset) {
+    texture.uOffset = threeTexture.offset.x;
+    texture.vOffset = threeTexture.offset.y;
+  }
+  return texture;
+}
+
+async function applyThreeMaterialToBabylonAsync(threeMat, babylonMat, fbxDir) {
+  if (!threeMat || !babylonMat) return;
+
+  if (threeMat.color) {
+    babylonMat.diffuseColor = new Color3(threeMat.color.r, threeMat.color.g, threeMat.color.b);
+  }
+  if (threeMat.emissive) {
+    babylonMat.emissiveColor = new Color3(threeMat.emissive.r, threeMat.emissive.g, threeMat.emissive.b);
+  }
+  if (typeof threeMat.opacity === 'number') {
+    babylonMat.alpha = threeMat.opacity;
+  }
+
+  const diffuseTex = await createBabylonTextureAsync(threeMat.map, fbxDir);
+  if (diffuseTex) {
+    babylonMat.diffuseTexture = diffuseTex;
+    babylonMat.diffuseTexture.hasAlpha = !!threeMat.transparent;
+    babylonMat.useAlphaFromDiffuseTexture = !!threeMat.transparent;
+  }
+
+  const opacityTex = await createBabylonTextureAsync(threeMat.alphaMap, fbxDir);
+  if (opacityTex) babylonMat.opacityTexture = opacityTex;
+
+  const emissiveTex = await createBabylonTextureAsync(threeMat.emissiveMap, fbxDir);
+  if (emissiveTex) babylonMat.emissiveTexture = emissiveTex;
+
+  const bumpTex = await createBabylonTextureAsync(threeMat.normalMap || threeMat.bumpMap, fbxDir);
+  if (bumpTex) babylonMat.bumpTexture = bumpTex;
+
+  babylonMat.backFaceCulling = threeMat.side !== THREE.DoubleSide;
 }
 
 function loadPLY(filePath) {
@@ -666,10 +816,16 @@ function fitCamera(meshes) {
 
   mainCamera.target = bounds.center;
   mainCamera.radius = radius;
-  mainCamera.alpha = CAMERA_DEFAULT_ALPHA;
-  mainCamera.beta = CAMERA_DEFAULT_BETA;
+  mainCamera.alpha  = CAMERA_DEFAULT_ALPHA;
+  mainCamera.beta   = CAMERA_DEFAULT_BETA;
   mainCamera.lowerRadiusLimit = radius * 0.01;
   mainCamera.upperRadiusLimit = radius * 50;
+
+  // Dynamically scale clipping planes to the model size.
+  // Keeping maxZ/minZ ratio ≤ 50 000 preserves depth-buffer precision
+  // and eliminates Z-fighting flicker on all model scales.
+  mainCamera.minZ = Math.max(radius * 0.001, 0.01);
+  mainCamera.maxZ = radius * 500;
 }
 
 /* ─────────────────────────────────────────────
