@@ -7,6 +7,8 @@ Space3D 是一个基于 Electron + BabylonJS 的本地 3D 模型查看器，支�
 - 支持 GLB、GLTF、OBJ、FBX、STL
 - 直接在桌面程序中查看、旋转、缩放、重置视角
 - 支持打包成 EXE 安装包，离线可运行
+- 支持中英文界面切换（默认英文）
+- 支持文件后缀关联打开（双击/右键打开方式）
 
 ## 技术栈
 - Electron：桌面壳和主进程
@@ -18,15 +20,15 @@ Space3D 是一个基于 Electron + BabylonJS 的本地 3D 模型查看器，支�
 ## 代码结构
 
 ### 根目录
-- `main.js`：Electron 主进程，创建窗口、菜单、文件打开对话框
-- `preload.js`：安全桥接 `ipcRenderer` 到渲染器
+- `main.js`：Electron 主进程，创建窗口、菜单、语言切换、文件打开对话框、文件关联启动参数处理
+- `preload.js`：安全桥接 `ipcRenderer` 到渲染器（包含语言 API）
 - `vite.config.js`：渲染器构建配置，输出到 `app/`
 - `package.json`：脚本、依赖和 electron-builder 配置
 - `copy-babylon.js`：历史辅助脚本，目前主要项目已改为 Vite + ESM 方案，不是主流程依赖
 
 ### 渲染器
-- `renderer/index.html`：渲染页面入口，包含工具栏、画布、信息面板、拖拽区域
-- `src/viewer.js`：核心 3D 逻辑，负责场景、相机、灯光、网格、模型加载和 UI 交互
+- `renderer/index.html`：渲染页面入口，包含工具栏、语言选择器、画布、信息面板、拖拽区域
+- `src/viewer.js`：核心 3D 逻辑，负责场景、双相机坐标 gizmo、本地坐标轴、模型加载、i18n 和 UI 交互
 
 ### 构建产物
 - `app/`：Vite 构建后的前端静态资源，Electron 运行时加载这里的 `index.html`
@@ -38,11 +40,13 @@ Space3D 是一个基于 Electron + BabylonJS 的本地 3D 模型查看器，支�
 1. 运行 `npm run build:renderer`
 2. Electron 加载 `app/index.html`
 3. 在窗口中打开模型文件或拖拽文件到窗口
+4. 可通过工具栏或菜单切换中英文界面
 
 ### 打包发布
 1. 先执行 `npm run build:renderer`
 2. 再执行 `npm run build`
 3. 生成 Windows 安装包到 `dist/`
+4. 安装后可使用文件关联打开模型
 
 ## 文件流转
 
@@ -51,6 +55,18 @@ Space3D 是一个基于 Electron + BabylonJS 的本地 3D 模型查看器，支�
 2. `main.js` 通过 IPC 把路径发送给渲染器
 3. `src/viewer.js` 根据扩展名决定加载器
 4. BabylonJS 或 Three.js 解析模型并渲染到画布
+
+### 文件关联打开路径
+1. 用户在资源管理器双击模型文件或右键打开
+2. Windows 将文件路径传给应用进程参数
+3. `main.js` 单实例逻辑接收路径并分发到渲染器
+4. `src/viewer.js` 执行同一套加载流程
+
+### 语言切换路径
+1. 用户在工具栏下拉或菜单 `View -> Language` 选择语言
+2. 主进程更新语言状态并重建菜单
+3. 主进程通过 IPC 通知渲染器同步语言
+4. 渲染器即时刷新 UI 文案
 
 ### 格式处理
 - `glb` / `gltf`：BabylonJS 原生 glTF 加载链路
@@ -61,7 +77,9 @@ Space3D 是一个基于 Electron + BabylonJS 的本地 3D 模型查看器，支�
 ## 运行时行为
 - 画布使用全窗口布局，尽量占满左侧显示区域
 - 支持拖拽文件进入窗口加载
-- 支持重置相机、切换线框、切换背景、显示/隐藏网格
+- 支持重置相机、切换线框、切换背景、显示/隐藏网格、显示/隐藏坐标轴
+- 世界坐标 gizmo 使用角落叠加渲染，不被模型遮挡
+- 本地坐标轴显示在模型包围盒中心
 - 为离线运行做了本地资源访问配置，避免 `file://` 和 `blob:` 资源被拦截
 
 ## 构建配置要点
@@ -69,12 +87,14 @@ Space3D 是一个基于 Electron + BabylonJS 的本地 3D 模型查看器，支�
 - `main.js` 固定加载 `app/index.html`
 - `electron-builder` 只打包 `main.js`、`preload.js` 和 `app/**/*`
 - 支持的安装包格式为 Windows NSIS 安装程序
+- `fileAssociations` 注册了 `.glb/.gltf/.obj/.fbx/.stl`
 
 ## 当前开发约定
 - 继续新增 UI 时，优先放在 `renderer/index.html` 与 `src/viewer.js`
 - 涉及窗口、菜单、系统对话框的逻辑放在 `main.js`
 - 如果新增资源类型，先确认 Electron 的离线资源访问和 CSP 是否需要同步放开
 - 新增构建步骤时，优先更新 `package.json` 的脚本和 `vite.config.js`
+- 所有新增 UI 文案必须同时维护 `en/zh` 词典键
 
 ## 备注
 当前项目已经具备一个可用的桌面查看器骨架，后续比较适合继续补充：
