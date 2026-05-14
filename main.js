@@ -2,9 +2,56 @@ const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const path = require('path');
 
 let mainWindow;
+let pendingModelPath = null;
+
+const supportedExtensions = new Set(['.glb', '.gltf', '.obj', '.fbx', '.stl']);
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 // Ensure local file:// model resources (textures/buffers) are readable when running offline.
 app.commandLine.appendSwitch('allow-file-access-from-files');
+
+function normalizeExtension(filePath) {
+  return path.extname(filePath || '').toLowerCase();
+}
+
+function isSupportedModelFile(filePath) {
+  return supportedExtensions.has(normalizeExtension(filePath));
+}
+
+function showAndFocusWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function openModelFile(filePath) {
+  if (!filePath || !isSupportedModelFile(filePath)) return false;
+
+  if (mainWindow && mainWindow.webContents) {
+    showAndFocusWindow();
+    mainWindow.webContents.send('load-model', filePath);
+  } else {
+    pendingModelPath = filePath;
+  }
+
+  return true;
+}
+
+function getFilePathFromArgv(argv) {
+  const args = argv.slice(1).filter(Boolean);
+  for (const arg of args) {
+    if (arg.startsWith('-')) continue;
+    if (isSupportedModelFile(arg)) return arg;
+  }
+  return null;
+}
+
+const initialModelPath = getFilePathFromArgv(process.argv);
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -33,6 +80,14 @@ function createWindow() {
   });
 
   buildMenu();
+
+  if (pendingModelPath) {
+    const filePath = pendingModelPath;
+    pendingModelPath = null;
+    mainWindow.webContents.once('did-finish-load', () => {
+      openModelFile(filePath);
+    });
+  }
 }
 
 function buildMenu() {
@@ -135,10 +190,29 @@ ipcMain.handle('open-file-dialog', async () => {
 });
 
 app.whenReady().then(() => {
+  if (initialModelPath) {
+    pendingModelPath = initialModelPath;
+  }
+
   createWindow();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on('second-instance', (_event, argv) => {
+  const filePath = getFilePathFromArgv(argv);
+  if (filePath) {
+    openModelFile(filePath);
+  } else {
+    showAndFocusWindow();
+  }
+});
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  openModelFile(filePath);
 });
 
 app.on('window-all-closed', () => {
