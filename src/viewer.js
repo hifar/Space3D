@@ -12,7 +12,7 @@
 import {
   Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight,
   ShadowGenerator, Vector3, Color3, Color4, MeshBuilder, VertexData,
-  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport,
+  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport, Quaternion,
 } from '@babylonjs/core';
 
 import { GridMaterial } from '@babylonjs/materials/grid/gridMaterial';
@@ -477,9 +477,15 @@ function loadFBX(filePath) {
       url,
       (fbxObj) => {
         try {
+          fbxObj.updateMatrixWorld(true);
+
           let totalVerts = 0;
           let meshCount  = 0;
           let matCount   = 0;
+
+          const worldPos = new THREE.Vector3();
+          const worldQuat = new THREE.Quaternion();
+          const worldScale = new THREE.Vector3();
 
           fbxObj.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) return;
@@ -503,7 +509,15 @@ function loadFBX(filePath) {
             vertexData.positions = positions;
             if (normals.length) vertexData.normals = normals;
             if (uvs.length)     vertexData.uvs = uvs;
-            if (indices)        vertexData.indices = indices;
+
+            // Non-indexed FBX mesh still needs triangle indices for Babylon.
+            if (indices) {
+              vertexData.indices = indices;
+            } else {
+              const autoIndices = [];
+              for (let i = 0; i < posAttr.count; i++) autoIndices.push(i);
+              vertexData.indices = autoIndices;
+            }
             vertexData.applyToMesh(babylonMesh);
 
             const mat = new StandardMaterial('fbx_mat_' + meshCount, scene);
@@ -511,11 +525,14 @@ function loadFBX(filePath) {
             if (threeMat && threeMat.color) {
               mat.diffuseColor = new Color3(threeMat.color.r, threeMat.color.g, threeMat.color.b);
             }
+            mat.backFaceCulling = false;
             babylonMesh.material = mat;
             babylonMesh.material.wireframe = wireframeOn;
 
-            const m4 = child.matrixWorld;
-            babylonMesh.position.set(m4.elements[12], m4.elements[13], m4.elements[14]);
+            child.matrixWorld.decompose(worldPos, worldQuat, worldScale);
+            babylonMesh.position.set(worldPos.x, worldPos.y, worldPos.z);
+            babylonMesh.scaling.set(worldScale.x, worldScale.y, worldScale.z);
+            babylonMesh.rotationQuaternion = new Quaternion(worldQuat.x, worldQuat.y, worldQuat.z, worldQuat.w);
 
             shadowGenerator.addShadowCaster(babylonMesh, true);
             babylonMesh.receiveShadows = true;
