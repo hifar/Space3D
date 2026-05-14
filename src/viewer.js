@@ -15,6 +15,7 @@ import {
 } from '@babylonjs/core';
 
 import { GridMaterial } from '@babylonjs/materials/grid/gridMaterial';
+import { SkyMaterial } from '@babylonjs/materials/sky/skyMaterial';
 
 import {
   SceneLoader,
@@ -39,7 +40,9 @@ const errorEl       = document.getElementById('error-msg');
 const fileLabelEl   = document.getElementById('file-label');
 const animControls  = document.getElementById('anim-controls');
 const btnWireframe  = document.getElementById('btn-wireframe');
+const btnBg         = document.getElementById('btn-bg');
 const btnGrid       = document.getElementById('btn-grid');
+const btnAxis       = document.getElementById('btn-axis');
 
 const infoName      = document.getElementById('info-name');
 const infoFormat    = document.getElementById('info-format');
@@ -59,10 +62,14 @@ const engine = new Engine(canvas, true, {
 let scene           = null;
 let currentMeshes   = [];
 let wireframeOn     = false;
-let bgDark          = true;
+let skyboxOn        = true;
 let gridOn          = true;
+let axisOn          = true;
 let shadowGenerator = null;
 let gridMesh        = null;
+let skyboxMesh      = null;
+let axisMeshes      = [];
+let axisBaseLength   = 6;
 
 /* ─────────────────────────────────────────────
    Create base scene
@@ -70,7 +77,7 @@ let gridMesh        = null;
 function createScene() {
   if (scene) scene.dispose();
   scene = new Scene(engine);
-  scene.clearColor = new Color4(0.1, 0.1, 0.18, 1);
+  scene.clearColor = new Color4(0.55, 0.72, 0.95, 1);
 
   const camera = new ArcRotateCamera('cam', -Math.PI / 2, Math.PI / 3, 10, Vector3.Zero(), scene);
   camera.attachControl(canvas, true);
@@ -90,6 +97,9 @@ function createScene() {
   shadowGenerator = new ShadowGenerator(2048, dir);
   shadowGenerator.useBlurExponentialShadowMap = true;
 
+  createSkybox();
+  createWorldAxes();
+
   // Ground grid
   gridMesh = MeshBuilder.CreateGround('grid', { width: 20, height: 20 }, scene);
   const gridMat = new GridMaterial('gridMat', scene);
@@ -102,11 +112,56 @@ function createScene() {
   gridMat.opacity = 0.6;
   gridMesh.material = gridMat;
   gridMesh.receiveShadows = true;
+  gridMesh.setEnabled(gridOn);
 
   return scene;
 }
 
+function createSkybox() {
+  skyboxMesh = MeshBuilder.CreateBox('skyBox', { size: 10000 }, scene);
+  const skyMaterial = new SkyMaterial('skyMaterial', scene);
+  skyMaterial.backFaceCulling = false;
+  skyMaterial.turbidity = 8;
+  skyMaterial.rayleigh = 2;
+  skyMaterial.mieCoefficient = 0.005;
+  skyMaterial.mieDirectionalG = 0.8;
+  skyMaterial.luminance = 1.15;
+  skyMaterial.useSunPosition = true;
+  skyMaterial.sunPosition = new Vector3(150, 90, -120);
+  skyboxMesh.material = skyMaterial;
+  skyboxMesh.isPickable = false;
+  skyboxMesh.infiniteDistance = true;
+  skyboxMesh.setEnabled(skyboxOn);
+}
+
+function createWorldAxes() {
+  const axisLength = axisBaseLength;
+  const xAxis = MeshBuilder.CreateLines('axisX', {
+    points: [Vector3.Zero(), new Vector3(axisLength, 0, 0)],
+  }, scene);
+  xAxis.color = new Color3(1, 0.25, 0.25);
+
+  const yAxis = MeshBuilder.CreateLines('axisY', {
+    points: [Vector3.Zero(), new Vector3(0, axisLength, 0)],
+  }, scene);
+  yAxis.color = new Color3(0.3, 1, 0.3);
+
+  const zAxis = MeshBuilder.CreateLines('axisZ', {
+    points: [Vector3.Zero(), new Vector3(0, 0, axisLength)],
+  }, scene);
+  zAxis.color = new Color3(0.35, 0.6, 1);
+
+  axisMeshes = [xAxis, yAxis, zAxis];
+  axisMeshes.forEach(mesh => {
+    mesh.isPickable = false;
+    mesh.setEnabled(axisOn);
+  });
+}
+
 createScene();
+btnBg.classList.add('active');
+btnGrid.classList.add('active');
+btnAxis.classList.add('active');
 engine.runRenderLoop(() => { if (scene) scene.render(); });
 window.addEventListener('resize', () => engine.resize());
 
@@ -329,6 +384,12 @@ function adjustGrid(meshes) {
   gridMesh.position.y = Math.min(minY - epsilon, 0);
   const s = (maxXZ * 3) / 20;
   gridMesh.scaling.set(s || 1, 1, s || 1);
+
+  const axisLength = Math.max(maxXZ * 0.18, 4);
+  const axisScale = axisLength / axisBaseLength;
+  axisMeshes.forEach((mesh, index) => {
+    mesh.scaling.set(axisScale, axisScale, axisScale);
+  });
 }
 
 /* ─────────────────────────────────────────────
@@ -396,14 +457,22 @@ document.getElementById('btn-wireframe').addEventListener('click', () => {
 });
 
 document.getElementById('btn-bg').addEventListener('click', () => {
-  bgDark = !bgDark;
-  scene.clearColor = bgDark ? new Color4(0.1, 0.1, 0.18, 1) : new Color4(0.92, 0.92, 0.92, 1);
+  skyboxOn = !skyboxOn;
+  btnBg.classList.toggle('active', skyboxOn);
+  if (skyboxMesh) skyboxMesh.setEnabled(skyboxOn);
+  scene.clearColor = skyboxOn ? new Color4(0.55, 0.72, 0.95, 1) : new Color4(0.14, 0.14, 0.18, 1);
 });
 
 document.getElementById('btn-grid').addEventListener('click', () => {
   gridOn = !gridOn;
-  btnGrid.classList.toggle('active', !gridOn);
+  btnGrid.classList.toggle('active', gridOn);
   if (gridMesh) gridMesh.setEnabled(gridOn);
+});
+
+document.getElementById('btn-axis').addEventListener('click', () => {
+  axisOn = !axisOn;
+  btnAxis.classList.toggle('active', axisOn);
+  axisMeshes.forEach(mesh => mesh.setEnabled(axisOn));
 });
 
 document.getElementById('btn-shadow').addEventListener('click', (e) => {
@@ -429,8 +498,10 @@ window.electronAPI.onToggleWireframe(() => {
   applyWireframe(wireframeOn);
 });
 window.electronAPI.onToggleBackground(() => {
-  bgDark = !bgDark;
-  scene.clearColor = bgDark ? new Color4(0.1, 0.1, 0.18, 1) : new Color4(0.92, 0.92, 0.92, 1);
+  skyboxOn = !skyboxOn;
+  btnBg.classList.toggle('active', skyboxOn);
+  if (skyboxMesh) skyboxMesh.setEnabled(skyboxOn);
+  scene.clearColor = skyboxOn ? new Color4(0.55, 0.72, 0.95, 1) : new Color4(0.14, 0.14, 0.18, 1);
 });
 
 /* ─────────────────────────────────────────────
