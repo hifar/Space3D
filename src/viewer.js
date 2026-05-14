@@ -11,15 +11,13 @@
 import {
   Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight,
   ShadowGenerator, Vector3, Color3, Color4, MeshBuilder, VertexData,
-  StandardMaterial, Mesh,
+  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport,
 } from '@babylonjs/core';
 
 import { GridMaterial } from '@babylonjs/materials/grid/gridMaterial';
 import { SkyMaterial } from '@babylonjs/materials/sky/skyMaterial';
 
-import {
-  SceneLoader,
-} from '@babylonjs/core/Loading/sceneLoader';
+import { SceneLoader } from '@babylonjs/core/Loading/sceneLoader';
 
 // Register all loaders (GLTF2, OBJ, STL)
 import '@babylonjs/loaders/glTF/index';
@@ -59,17 +57,27 @@ const engine = new Engine(canvas, true, {
   stencil: true,
 });
 
-let scene           = null;
-let currentMeshes   = [];
-let wireframeOn     = false;
-let skyboxOn        = true;
-let gridOn          = true;
-let axisOn          = true;
-let shadowGenerator = null;
-let gridMesh        = null;
-let skyboxMesh      = null;
-let axisMeshes      = [];
-let axisBaseLength   = 6;
+let scene            = null;
+let mainCamera       = null;
+let gizmoCamera      = null;
+let currentMeshes    = [];
+let wireframeOn      = false;
+let skyboxOn         = true;
+let gridOn           = true;
+let axisOn           = true;
+let shadowGenerator  = null;
+let gridMesh         = null;
+let skyboxMesh       = null;
+let worldAxisRoot    = null;
+let localAxisRoot    = null;
+
+const CAMERA_DEFAULT_ALPHA = Math.PI / 2;
+const CAMERA_DEFAULT_BETA = Math.PI / 3;
+
+const MAIN_LAYER_MASK = 0x0FFFFFFF;
+const GIZMO_LAYER_MASK = 0x10000000;
+const WORLD_AXIS_BASE_LENGTH = 1.2;
+const LOCAL_AXIS_BASE_LENGTH = 1.0;
 
 /* ─────────────────────────────────────────────
    Create base scene
@@ -79,13 +87,22 @@ function createScene() {
   scene = new Scene(engine);
   scene.clearColor = new Color4(0.55, 0.72, 0.95, 1);
 
-  const camera = new ArcRotateCamera('cam', -Math.PI / 2, Math.PI / 3, 10, Vector3.Zero(), scene);
-  camera.attachControl(canvas, true);
-  camera.lowerRadiusLimit = 0.01;
-  camera.upperRadiusLimit = 5000;
-  camera.wheelDeltaPercentage = 0.01;
-  camera.minZ = 0.001;
-  camera.maxZ = 100000;
+  mainCamera = new ArcRotateCamera('mainCamera', CAMERA_DEFAULT_ALPHA, CAMERA_DEFAULT_BETA, 10, Vector3.Zero(), scene);
+  mainCamera.attachControl(canvas, true);
+  mainCamera.lowerRadiusLimit = 0.01;
+  mainCamera.upperRadiusLimit = 5000;
+  mainCamera.wheelDeltaPercentage = 0.01;
+  mainCamera.minZ = 0.001;
+  mainCamera.maxZ = 100000;
+  mainCamera.layerMask = MAIN_LAYER_MASK;
+
+  gizmoCamera = new FreeCamera('gizmoCamera', new Vector3(0, 0, -4), scene);
+  gizmoCamera.layerMask = GIZMO_LAYER_MASK;
+  gizmoCamera.minZ = 0.01;
+  gizmoCamera.maxZ = 20;
+  gizmoCamera.viewport = new Viewport(0.85, 0.03, 0.12, 0.12);
+
+  scene.activeCameras = [mainCamera, gizmoCamera];
 
   const hemi = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
   hemi.intensity = 0.6;
@@ -98,7 +115,8 @@ function createScene() {
   shadowGenerator.useBlurExponentialShadowMap = true;
 
   createSkybox();
-  createWorldAxes();
+  createWorldAxisGizmo();
+  createLocalAxes();
 
   // Ground grid
   gridMesh = MeshBuilder.CreateGround('grid', { width: 20, height: 20 }, scene);
@@ -113,6 +131,8 @@ function createScene() {
   gridMesh.material = gridMat;
   gridMesh.receiveShadows = true;
   gridMesh.setEnabled(gridOn);
+
+  scene.onBeforeRenderObservable.add(syncWorldGizmoCamera);
 
   return scene;
 }
@@ -134,28 +154,54 @@ function createSkybox() {
   skyboxMesh.setEnabled(skyboxOn);
 }
 
-function createWorldAxes() {
-  const axisLength = axisBaseLength;
-  const xAxis = MeshBuilder.CreateLines('axisX', {
-    points: [Vector3.Zero(), new Vector3(axisLength, 0, 0)],
+function createAxisTripod(prefix, parent, length, layerMask) {
+  const xAxis = MeshBuilder.CreateLines(prefix + 'X', {
+    points: [Vector3.Zero(), new Vector3(length, 0, 0)],
   }, scene);
+  xAxis.parent = parent;
   xAxis.color = new Color3(1, 0.25, 0.25);
 
-  const yAxis = MeshBuilder.CreateLines('axisY', {
-    points: [Vector3.Zero(), new Vector3(0, axisLength, 0)],
+  const yAxis = MeshBuilder.CreateLines(prefix + 'Y', {
+    points: [Vector3.Zero(), new Vector3(0, length, 0)],
   }, scene);
+  yAxis.parent = parent;
   yAxis.color = new Color3(0.3, 1, 0.3);
 
-  const zAxis = MeshBuilder.CreateLines('axisZ', {
-    points: [Vector3.Zero(), new Vector3(0, 0, axisLength)],
+  const zAxis = MeshBuilder.CreateLines(prefix + 'Z', {
+    points: [Vector3.Zero(), new Vector3(0, 0, length)],
   }, scene);
+  zAxis.parent = parent;
   zAxis.color = new Color3(0.35, 0.6, 1);
 
-  axisMeshes = [xAxis, yAxis, zAxis];
-  axisMeshes.forEach(mesh => {
+  [xAxis, yAxis, zAxis].forEach(mesh => {
     mesh.isPickable = false;
-    mesh.setEnabled(axisOn);
+    mesh.layerMask = layerMask;
+    mesh.alwaysSelectAsActiveMesh = true;
+    mesh.renderingGroupId = 2;
   });
+}
+
+function createWorldAxisGizmo() {
+  worldAxisRoot = new TransformNode('worldAxisRoot', scene);
+  createAxisTripod('worldAxis', worldAxisRoot, WORLD_AXIS_BASE_LENGTH, GIZMO_LAYER_MASK);
+  worldAxisRoot.setEnabled(axisOn);
+}
+
+function createLocalAxes() {
+  localAxisRoot = new TransformNode('localAxisRoot', scene);
+  createAxisTripod('localAxis', localAxisRoot, LOCAL_AXIS_BASE_LENGTH, MAIN_LAYER_MASK);
+  localAxisRoot.setEnabled(false);
+}
+
+function syncWorldGizmoCamera() {
+  if (!axisOn || !mainCamera || !gizmoCamera || !worldAxisRoot) return;
+
+  const mainForward = mainCamera.target.subtract(mainCamera.position);
+  if (mainForward.lengthSquared() < 1e-8) return;
+
+  const dir = mainForward.normalize();
+  gizmoCamera.position.copyFrom(dir.scale(-4));
+  gizmoCamera.setTarget(Vector3.Zero());
 }
 
 createScene();
@@ -166,6 +212,39 @@ engine.runRenderLoop(() => { if (scene) scene.render(); });
 window.addEventListener('resize', () => engine.resize());
 
 /* ─────────────────────────────────────────────
+   Bounds helpers
+───────────────────────────────────────────── */
+function getModelBounds(meshes) {
+  const valid = meshes.filter(m => m.getBoundingInfo && m.getTotalVertices && m.getTotalVertices() > 0);
+  if (!valid.length) return null;
+
+  const min = new Vector3( 1e9,  1e9,  1e9);
+  const max = new Vector3(-1e9, -1e9, -1e9);
+
+  valid.forEach(m => {
+    try {
+      m.computeWorldMatrix(true);
+      const bi = m.getBoundingInfo();
+      const lo = bi.boundingBox.minimumWorld;
+      const hi = bi.boundingBox.maximumWorld;
+      if (lo.x < min.x) min.x = lo.x;
+      if (lo.y < min.y) min.y = lo.y;
+      if (lo.z < min.z) min.z = lo.z;
+      if (hi.x > max.x) max.x = hi.x;
+      if (hi.y > max.y) max.y = hi.y;
+      if (hi.z > max.z) max.z = hi.z;
+    } catch (_) {}
+  });
+
+  return {
+    min,
+    max,
+    center: Vector3.Center(min, max),
+    size: max.subtract(min),
+  };
+}
+
+/* ─────────────────────────────────────────────
    Load model dispatcher
 ───────────────────────────────────────────── */
 async function loadModel(filePath) {
@@ -174,6 +253,7 @@ async function loadModel(filePath) {
 
   currentMeshes.forEach(m => m.dispose && m.dispose());
   currentMeshes = [];
+  if (localAxisRoot) localAxisRoot.setEnabled(false);
   clearAnimControls();
 
   const fileName = filePath.replace(/\\/g, '/').split('/').pop();
@@ -208,7 +288,7 @@ async function loadBabylon(filePath, fileName, ext) {
   currentMeshes = result.meshes;
 
   currentMeshes.forEach(m => {
-    if (m.getTotalVertices() > 0) {
+    if (m.getTotalVertices && m.getTotalVertices() > 0) {
       shadowGenerator.addShadowCaster(m, true);
       m.receiveShadows = true;
     }
@@ -216,6 +296,7 @@ async function loadBabylon(filePath, fileName, ext) {
 
   fitCamera(currentMeshes);
   adjustGrid(currentMeshes);
+  updateLocalAxes(currentMeshes);
   applyWireframe(wireframeOn);
 
   const verts  = currentMeshes.reduce((s, m) => s + (m.getTotalVertices ? m.getTotalVertices() : 0), 0);
@@ -238,7 +319,6 @@ async function loadBabylon(filePath, fileName, ext) {
 function loadFBX(filePath) {
   return new Promise((resolve, reject) => {
     const loader = new FBXLoader();
-    // Convert windows path to file:// URL
     const url = 'file:///' + filePath.replace(/\\/g, '/');
 
     loader.load(
@@ -270,12 +350,11 @@ function loadFBX(filePath) {
             const vertexData  = new VertexData();
             vertexData.positions = positions;
             if (normals.length) vertexData.normals = normals;
-            if (uvs.length)     vertexData.uvs     = uvs;
-            if (indices)        vertexData.indices  = indices;
+            if (uvs.length)     vertexData.uvs = uvs;
+            if (indices)        vertexData.indices = indices;
             vertexData.applyToMesh(babylonMesh);
 
             const mat = new StandardMaterial('fbx_mat_' + meshCount, scene);
-            // Transfer basic color from Three material
             const threeMat = Array.isArray(child.material) ? child.material[0] : child.material;
             if (threeMat && threeMat.color) {
               mat.diffuseColor = new Color3(threeMat.color.r, threeMat.color.g, threeMat.color.b);
@@ -283,7 +362,6 @@ function loadFBX(filePath) {
             babylonMesh.material = mat;
             babylonMesh.material.wireframe = wireframeOn;
 
-            // Apply Three.js transform
             const m4 = child.matrixWorld;
             babylonMesh.position.set(m4.elements[12], m4.elements[13], m4.elements[14]);
 
@@ -298,6 +376,7 @@ function loadFBX(filePath) {
 
           fitCamera(currentMeshes);
           adjustGrid(currentMeshes);
+          updateLocalAxes(currentMeshes);
 
           infoMeshes.textContent     = meshCount;
           infoVertices.textContent   = totalVerts.toLocaleString();
@@ -323,38 +402,17 @@ function loadFBX(filePath) {
    Camera fit
 ───────────────────────────────────────────── */
 function fitCamera(meshes) {
-  const valid = meshes.filter(m => m.getBoundingInfo);
-  if (!valid.length) return;
+  const bounds = getModelBounds(meshes);
+  if (!bounds || !mainCamera) return;
 
-  let min = new Vector3( 1e9,  1e9,  1e9);
-  let max = new Vector3(-1e9, -1e9, -1e9);
+  const radius = Math.max(bounds.size.x, bounds.size.y, bounds.size.z) * 1.2 || 10;
 
-  valid.forEach(m => {
-    try {
-      m.computeWorldMatrix(true);
-      const bi = m.getBoundingInfo();
-      const lo = bi.boundingBox.minimumWorld;
-      const hi = bi.boundingBox.maximumWorld;
-      if (lo.x < min.x) min.x = lo.x;
-      if (lo.y < min.y) min.y = lo.y;
-      if (lo.z < min.z) min.z = lo.z;
-      if (hi.x > max.x) max.x = hi.x;
-      if (hi.y > max.y) max.y = hi.y;
-      if (hi.z > max.z) max.z = hi.z;
-    } catch (_) {}
-  });
-
-  const center = Vector3.Center(min, max);
-  const size   = max.subtract(min);
-  const radius = Math.max(size.x, size.y, size.z) * 1.2 || 10;
-
-  const cam    = scene.activeCamera;
-  cam.target   = center;
-  cam.radius   = radius;
-  cam.alpha    = -Math.PI / 2;
-  cam.beta     = Math.PI / 3;
-  cam.lowerRadiusLimit = radius * 0.01;
-  cam.upperRadiusLimit = radius * 50;
+  mainCamera.target = bounds.center;
+  mainCamera.radius = radius;
+  mainCamera.alpha = CAMERA_DEFAULT_ALPHA;
+  mainCamera.beta = CAMERA_DEFAULT_BETA;
+  mainCamera.lowerRadiusLimit = radius * 0.01;
+  mainCamera.upperRadiusLimit = radius * 50;
 }
 
 /* ─────────────────────────────────────────────
@@ -362,34 +420,32 @@ function fitCamera(meshes) {
 ───────────────────────────────────────────── */
 function adjustGrid(meshes) {
   if (!gridMesh) return;
-  const valid = meshes.filter(m => m.getBoundingInfo);
-  if (!valid.length) return;
+  const bounds = getModelBounds(meshes);
+  if (!bounds) return;
 
-  let minY = 1e9;
-  let maxXZ = 0;
-  valid.forEach(m => {
-    try {
-      m.computeWorldMatrix(true);
-      const bi = m.getBoundingInfo();
-      if (bi.boundingBox.minimumWorld.y < minY) minY = bi.boundingBox.minimumWorld.y;
-      const dx = bi.boundingBox.maximumWorld.x - bi.boundingBox.minimumWorld.x;
-      const dz = bi.boundingBox.maximumWorld.z - bi.boundingBox.minimumWorld.z;
-      const d  = Math.max(dx, dz);
-      if (d > maxXZ) maxXZ = d;
-    } catch (_) {}
-  });
-
-  // Keep grid slightly below model base to prevent z-fighting shimmer.
+  const maxXZ = Math.max(bounds.size.x, bounds.size.z);
   const epsilon = Math.max(maxXZ * 0.001, 0.01);
-  gridMesh.position.y = Math.min(minY - epsilon, 0);
-  const s = (maxXZ * 3) / 20;
-  gridMesh.scaling.set(s || 1, 1, s || 1);
 
-  const axisLength = Math.max(maxXZ * 0.18, 4);
-  const axisScale = axisLength / axisBaseLength;
-  axisMeshes.forEach((mesh, index) => {
-    mesh.scaling.set(axisScale, axisScale, axisScale);
-  });
+  gridMesh.position.y = Math.min(bounds.min.y - epsilon, 0);
+  const scale = (maxXZ * 3) / 20;
+  gridMesh.scaling.set(scale || 1, 1, scale || 1);
+}
+
+function updateLocalAxes(meshes) {
+  if (!localAxisRoot) return;
+
+  const bounds = getModelBounds(meshes);
+  if (!bounds) {
+    localAxisRoot.setEnabled(false);
+    return;
+  }
+
+  const axisSize = Math.max(Math.max(bounds.size.x, bounds.size.y, bounds.size.z) * 0.12, 0.8);
+  const axisScale = axisSize / LOCAL_AXIS_BASE_LENGTH;
+
+  localAxisRoot.position.copyFrom(bounds.center);
+  localAxisRoot.scaling.set(axisScale, axisScale, axisScale);
+  localAxisRoot.setEnabled(axisOn);
 }
 
 /* ─────────────────────────────────────────────
@@ -409,18 +465,29 @@ function buildAnimControls(groups) {
   groups.forEach((g, i) => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
     const lbl = document.createElement('span');
     lbl.textContent = g.name || `动画 ${i + 1}`;
     lbl.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#aaa;';
+
     const btn = document.createElement('button');
     btn.className = 'btn';
     btn.style.cssText = 'padding:3px 8px;font-size:11px;';
     btn.textContent = i === 0 ? '⏸' : '▶';
     btn.dataset.playing = i === 0 ? '1' : '0';
+
     btn.addEventListener('click', () => {
-      if (btn.dataset.playing === '1') { g.pause(); btn.textContent = '▶'; btn.dataset.playing = '0'; }
-      else                             { g.start(true); btn.textContent = '⏸'; btn.dataset.playing = '1'; }
+      if (btn.dataset.playing === '1') {
+        g.pause();
+        btn.textContent = '▶';
+        btn.dataset.playing = '0';
+      } else {
+        g.start(true);
+        btn.textContent = '⏸';
+        btn.dataset.playing = '1';
+      }
     });
+
     row.append(lbl, btn);
     animControls.appendChild(row);
   });
@@ -456,23 +523,24 @@ document.getElementById('btn-wireframe').addEventListener('click', () => {
   applyWireframe(wireframeOn);
 });
 
-document.getElementById('btn-bg').addEventListener('click', () => {
+btnBg.addEventListener('click', () => {
   skyboxOn = !skyboxOn;
   btnBg.classList.toggle('active', skyboxOn);
   if (skyboxMesh) skyboxMesh.setEnabled(skyboxOn);
   scene.clearColor = skyboxOn ? new Color4(0.55, 0.72, 0.95, 1) : new Color4(0.14, 0.14, 0.18, 1);
 });
 
-document.getElementById('btn-grid').addEventListener('click', () => {
+btnGrid.addEventListener('click', () => {
   gridOn = !gridOn;
   btnGrid.classList.toggle('active', gridOn);
   if (gridMesh) gridMesh.setEnabled(gridOn);
 });
 
-document.getElementById('btn-axis').addEventListener('click', () => {
+btnAxis.addEventListener('click', () => {
   axisOn = !axisOn;
   btnAxis.classList.toggle('active', axisOn);
-  axisMeshes.forEach(mesh => mesh.setEnabled(axisOn));
+  if (worldAxisRoot) worldAxisRoot.setEnabled(axisOn);
+  if (localAxisRoot) localAxisRoot.setEnabled(axisOn && currentMeshes.length > 0);
 });
 
 document.getElementById('btn-shadow').addEventListener('click', (e) => {
@@ -480,10 +548,16 @@ document.getElementById('btn-shadow').addEventListener('click', (e) => {
   const shadowsVisible = btn.dataset.on !== '0';
   if (shadowsVisible) {
     shadowGenerator.getShadowMap().renderList.length = 0;
-    btn.dataset.on = '0'; btn.classList.add('active');
+    btn.dataset.on = '0';
+    btn.classList.add('active');
   } else {
-    currentMeshes.forEach(m => { if (m.getTotalVertices && m.getTotalVertices() > 0) shadowGenerator.addShadowCaster(m, true); });
-    btn.dataset.on = '1'; btn.classList.remove('active');
+    currentMeshes.forEach(m => {
+      if (m.getTotalVertices && m.getTotalVertices() > 0) {
+        shadowGenerator.addShadowCaster(m, true);
+      }
+    });
+    btn.dataset.on = '1';
+    btn.classList.remove('active');
   }
 });
 
@@ -508,15 +582,20 @@ window.electronAPI.onToggleBackground(() => {
    Drag & Drop
 ───────────────────────────────────────────── */
 const dropOverlay = document.getElementById('drop-overlay');
-document.addEventListener('dragover',  e => { e.preventDefault(); dropOverlay.classList.add('visible'); });
-document.addEventListener('dragleave', e => { if (!e.relatedTarget) dropOverlay.classList.remove('visible'); });
+document.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropOverlay.classList.add('visible');
+});
+document.addEventListener('dragleave', e => {
+  if (!e.relatedTarget) dropOverlay.classList.remove('visible');
+});
 document.addEventListener('drop', e => {
   e.preventDefault();
   dropOverlay.classList.remove('visible');
   const file = e.dataTransfer.files[0];
   if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
-  if (!['glb','gltf','obj','fbx','stl'].includes(ext)) {
+  if (!['glb', 'gltf', 'obj', 'fbx', 'stl'].includes(ext)) {
     showError('不支持的格式: .' + ext + '  (支持: GLB GLTF OBJ FBX STL)');
     return;
   }
