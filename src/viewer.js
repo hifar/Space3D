@@ -12,7 +12,7 @@
 import {
   Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight,
   ShadowGenerator, Vector3, Color3, Color4, MeshBuilder, VertexData,
-  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport, Quaternion,
+  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport, Quaternion, Space,
 } from '@babylonjs/core';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
 
@@ -43,12 +43,15 @@ const langSelectEl  = document.getElementById('lang-select');
 const animControls  = document.getElementById('anim-controls');
 const btnOpen       = document.getElementById('btn-open');
 const btnReset      = document.getElementById('btn-reset');
+const btnScale      = document.getElementById('btn-scale');
 const btnWireframe  = document.getElementById('btn-wireframe');
 const btnBg         = document.getElementById('btn-bg');
+const btnLight      = document.getElementById('btn-light');
 const btnGrid       = document.getElementById('btn-grid');
 const btnAxis       = document.getElementById('btn-axis');
 const btnShadow     = document.getElementById('btn-shadow');
 const btnFixX       = document.getElementById('btn-fix-x');
+const btnFixY       = document.getElementById('btn-fix-y');
 const btnFixZ       = document.getElementById('btn-fix-z');
 
 const welcomeSubtitleEl = document.getElementById('welcome-subtitle');
@@ -94,11 +97,16 @@ let shadowGenerator  = null;
 let gridMesh         = null;
 let shadowGround     = null;
 let skyboxMesh       = null;
+let hemisphericLight = null;
+let directionalLight = null;
 let worldAxisRoot    = null;
 let localAxisRoot    = null;
+let modelTransformRoot = null;
 let currentLanguage  = 'en';
 let fileLabelIsDefault = true;
 let fbxAnimationState = null;
+let backgroundPresetIndex = 0;
+let lightPresetIndex = 0;
 
 const CAMERA_DEFAULT_ALPHA = Math.PI / 2;
 const CAMERA_DEFAULT_BETA = Math.PI / 3;
@@ -107,17 +115,33 @@ const MAIN_LAYER_MASK = 0x0FFFFFFF;
 const GIZMO_LAYER_MASK = 0x10000000;
 const WORLD_AXIS_BASE_LENGTH = 1.2;
 const LOCAL_AXIS_BASE_LENGTH = 1.0;
+const VIEWER_MODEL_SIZE = 10;
+const BACKGROUND_PRESETS = [
+  { name: 'Blue', color: new Color4(0.55, 0.72, 0.95, 1), skybox: false },
+  { name: 'Studio', color: new Color4(0.73, 0.76, 0.8, 1), skybox: false },
+  { name: 'Graphite', color: new Color4(0.12, 0.14, 0.18, 1), skybox: false },
+  { name: 'Slate', color: new Color4(0.18, 0.28, 0.36, 1), skybox: false },
+];
+const LIGHT_PRESETS = [
+  { name: 'Studio', hemi: 0.6, direction: new Vector3(-1, -2, -1), intensity: 1.2 },
+  { name: 'Soft', hemi: 1.0, direction: new Vector3(-0.5, -1, -0.5), intensity: 0.7 },
+  { name: 'Side', hemi: 0.35, direction: new Vector3(1, -1.5, -0.25), intensity: 1.5 },
+  { name: 'Contrast', hemi: 0.15, direction: new Vector3(-1, -2.5, 0.5), intensity: 1.8 },
+];
 
 const i18n = {
   en: {
     btnOpen: '📂 Open',
     btnReset: '⟳ Reset',
+    btnScale: '⤢ Scale to Viewer',
     btnWireframe: '⬡ Wireframe',
     btnBackground: '◑ Background',
+    btnLight: '☀ Light',
     btnGrid: '⊞ Grid',
     btnAxis: '⟂ Axis',
     btnShadows: '☀ Shadows',
     btnFixX: '↻ X',
+    btnFixY: '↻ Y',
     btnFixZ: '↻ Z',
     fileHint: 'Drop a file here or click Open',
     welcomeSubtitle: 'Drop a 3D model here, or click Open in the toolbar',
@@ -143,12 +167,15 @@ const i18n = {
   zh: {
     btnOpen: '📂 打开文件',
     btnReset: '⟳ 重置视角',
+    btnScale: '⤢ 适配视图缩放',
     btnWireframe: '⬡ 线框',
     btnBackground: '◑ 背景',
+    btnLight: '☀ 光照',
     btnGrid: '⊞ 网格',
     btnAxis: '⟂ 坐标轴',
     btnShadows: '☀ 阴影',
     btnFixX: '↻ X轴',
+    btnFixY: '↻ Y轴',
     btnFixZ: '↻ Z轴',
     fileHint: '拖拽文件到窗口或点击"打开文件"',
     welcomeSubtitle: '拖拽3D模型文件到此处，或点击工具栏"打开文件"',
@@ -185,12 +212,15 @@ function applyLanguage(lang) {
 
   btnOpen.textContent = t('btnOpen');
   btnReset.textContent = t('btnReset');
+  btnScale.textContent = t('btnScale');
   btnWireframe.textContent = t('btnWireframe');
   btnBg.textContent = t('btnBackground');
+  btnLight.textContent = t('btnLight');
   btnGrid.textContent = t('btnGrid');
   btnAxis.textContent = t('btnAxis');
   btnShadow.textContent = t('btnShadows');
   btnFixX.textContent = t('btnFixX');
+  btnFixY.textContent = t('btnFixY');
   btnFixZ.textContent = t('btnFixZ');
 
   if (fileLabelIsDefault) fileLabelEl.textContent = t('fileHint');
@@ -211,6 +241,7 @@ function applyLanguage(lang) {
     animEmptyEl.textContent = t('noAnimations');
   }
   dropTextEl.textContent = t('dropText');
+  updatePresetButtonLabels();
 }
 
 async function initLanguage() {
@@ -247,19 +278,21 @@ function createScene() {
 
   scene.activeCameras = [mainCamera, gizmoCamera];
 
-  const hemi = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
-  hemi.intensity = 0.6;
+  hemisphericLight = new HemisphericLight('hemi', new Vector3(0, 1, 0), scene);
+  hemisphericLight.intensity = 0.6;
 
-  const dir = new DirectionalLight('dir', new Vector3(-1, -2, -1), scene);
-  dir.position = new Vector3(10, 20, 10);
-  dir.intensity = 1.2;
+  directionalLight = new DirectionalLight('dir', new Vector3(-1, -2, -1), scene);
+  directionalLight.position = new Vector3(10, 20, 10);
+  directionalLight.intensity = 1.2;
 
-  shadowGenerator = new ShadowGenerator(2048, dir);
+  shadowGenerator = new ShadowGenerator(2048, directionalLight);
   shadowGenerator.useBlurExponentialShadowMap = true;
   shadowGenerator.bias       = 0.01;
   shadowGenerator.normalBias = 0.05;
 
   createSkybox();
+  applyBackgroundPreset();
+  applyLightPreset();
   createWorldAxisGizmo();
   createLocalAxes();
 
@@ -274,16 +307,17 @@ function createScene() {
   gridMat.lineColor = new Color3(0.2, 0.4, 0.8);
   gridMat.opacity = 0.6;
   gridMesh.material = gridMat;
+  gridMesh.renderingGroupId = 1;
   gridMesh.setEnabled(gridOn);
 
   shadowGround = MeshBuilder.CreateGround('shadowGround', { width: 20, height: 20 }, scene);
   const shadowGroundMat = new StandardMaterial('shadowGroundMat', scene);
   shadowGroundMat.diffuseColor = new Color3(0.45, 0.62, 0.85);
   shadowGroundMat.specularColor = Color3.Black();
-  shadowGroundMat.alpha = 0.42;
   shadowGround.material = shadowGroundMat;
   shadowGround.receiveShadows = true;
   shadowGround.isPickable = false;
+  shadowGround.renderingGroupId = 0;
   shadowGround.setEnabled(gridOn);
 
   scene.onBeforeRenderObservable.add(syncWorldGizmoCamera);
@@ -305,7 +339,7 @@ function createSkybox() {
   skyboxMesh.material = skyMaterial;
   skyboxMesh.isPickable = false;
   skyboxMesh.infiniteDistance = true;
-  skyboxMesh.setEnabled(skyboxOn);
+  skyboxMesh.setEnabled(false);
 }
 
 function createAxisTripod(prefix, parent, length, layerMask) {
@@ -416,6 +450,18 @@ function getModelBounds(meshes) {
   };
 }
 
+function prepareGenericModelTransform() {
+  const bounds = getModelBounds(currentMeshes);
+  if (!bounds) return;
+
+  modelTransformRoot = new TransformNode('modelTransformRoot', scene);
+  modelTransformRoot.position.copyFrom(bounds.center);
+  const nodes = new Set(currentMeshes);
+  currentMeshes
+    .filter(node => !nodes.has(node.parent))
+    .forEach(node => node.setParent(modelTransformRoot, true));
+}
+
 /* ─────────────────────────────────────────────
    Load model dispatcher
 ───────────────────────────────────────────── */
@@ -423,8 +469,16 @@ async function loadModel(filePath) {
   showLoading(true);
   hideError();
 
+  if (typeof filePath !== 'string' || !filePath) {
+    showLoading(false);
+    showError(t('loadFailedPrefix') + 'missing local file path');
+    return;
+  }
+
   currentMeshes.forEach(m => m.dispose && m.dispose());
+  if (modelTransformRoot) modelTransformRoot.dispose();
   currentMeshes = [];
+  modelTransformRoot = null;
   fbxAnimationState = null;
   if (localAxisRoot) localAxisRoot.setEnabled(false);
   clearAnimControls();
@@ -462,6 +516,7 @@ async function loadBabylon(filePath, fileName, ext) {
 
   const result = await SceneLoader.ImportMeshAsync('', folder, fileName, scene);
   currentMeshes = result.meshes;
+  prepareGenericModelTransform();
 
   currentMeshes.forEach(m => {
     if (m.getTotalVertices && m.getTotalVertices() > 0) {
@@ -609,7 +664,12 @@ function loadFBX(filePath) {
             bones,
             center: modelBounds?.center || Vector3.Zero(),
             rotationX: 0,
+            rotationY: 0,
             rotationZ: 0,
+            scale: 1,
+            translationX: 0,
+            translationY: 0,
+            translationZ: 0,
           };
 
           if (clips.length > 0) {
@@ -727,28 +787,44 @@ function correctFBXPoint(x, y, z) {
   for (let step = 0; step < fbxAnimationState.rotationX; step++) {
     [correctedY, correctedZ] = [-correctedZ, correctedY];
   }
+  for (let step = 0; step < fbxAnimationState.rotationY; step++) {
+    [correctedX, correctedZ] = [correctedZ, -correctedX];
+  }
   for (let step = 0; step < fbxAnimationState.rotationZ; step++) {
     [correctedX, correctedY] = [-correctedY, correctedX];
   }
-  return new Vector3(correctedX + center.x, correctedY + center.y, correctedZ + center.z);
+  const scale = fbxAnimationState.scale;
+  return new Vector3(
+    correctedX * scale + center.x + fbxAnimationState.translationX,
+    correctedY * scale + center.y + fbxAnimationState.translationY,
+    correctedZ * scale + center.z + fbxAnimationState.translationZ,
+  );
 }
 
 function updateFBXSkeletonHelper(helper, bones) {
   const segments = getFBXSkeletonSegments(bones);
   const center = fbxAnimationState?.center || Vector3.Zero();
+  const visualScale = fbxAnimationState?.scale || 1;
   const depthScale = Math.max(...segments.map(segment => Math.abs(segment.start.z - center.z)), 1);
   segments.forEach((segment, index) => {
     const visual = helper.visuals[index];
     if (!visual) return;
     const direction = segment.end.subtract(segment.start);
     const length = direction.length();
-    if (length < 1e-6) return;
+    if (length < 1e-6) {
+      visual.bone.setEnabled(false);
+      visual.joint.setEnabled(false);
+      return;
+    }
 
+    visual.bone.setEnabled(true);
+    visual.joint.setEnabled(true);
     visual.bone.position.copyFrom(Vector3.Center(segment.start, segment.end));
-    visual.bone.scaling.y = length;
+    visual.bone.scaling.set(visualScale, length, visualScale);
     visual.bone.rotationQuaternion = visual.bone.rotationQuaternion || Quaternion.Identity();
     Quaternion.FromUnitVectorsToRef(Vector3.Up(), direction.scale(1 / length), visual.bone.rotationQuaternion);
     visual.joint.position.copyFrom(segment.end);
+    visual.joint.scaling.set(visualScale, visualScale, visualScale);
 
     const depth = Math.max(-1, Math.min(1, (visual.bone.position.z - center.z) / depthScale));
     visual.material.diffuseColor = depth >= 0
@@ -946,6 +1022,8 @@ function loadPLY(filePath) {
 
           currentMeshes.push(babylonMesh);
 
+          prepareGenericModelTransform();
+
           fitCamera(currentMeshes);
           adjustGrid(currentMeshes);
           updateLocalAxes(currentMeshes);
@@ -975,7 +1053,7 @@ function fitCamera(meshes) {
 
   const radius = Math.max(bounds.size.x, bounds.size.y, bounds.size.z) * 1.2 || 10;
 
-  mainCamera.target = bounds.center;
+  mainCamera.setTarget(bounds.center);
   mainCamera.radius = radius;
   mainCamera.alpha  = CAMERA_DEFAULT_ALPHA;
   mainCamera.beta   = CAMERA_DEFAULT_BETA;
@@ -1000,10 +1078,11 @@ function adjustGrid(meshes) {
   const maxXZ = Math.max(bounds.size.x, bounds.size.z);
   const epsilon = Math.max(maxXZ * 0.001, 0.01);
 
-  gridMesh.position.y = Math.min(bounds.min.y - epsilon, 0);
+  const groundY = Math.min(bounds.min.y - epsilon, 0);
+  shadowGround.position.y = groundY;
+  gridMesh.position.y = groundY + epsilon * 0.02;
   const scale = (maxXZ * 3) / 20;
   gridMesh.scaling.set(scale || 1, 1, scale || 1);
-  shadowGround.position.y = gridMesh.position.y - epsilon * 0.1;
   shadowGround.scaling.copyFrom(gridMesh.scaling);
 }
 
@@ -1131,6 +1210,31 @@ function showLoading(on) { loadingEl.classList.toggle('visible', on); }
 function showError(msg)  { errorEl.textContent = msg; errorEl.classList.add('visible'); setTimeout(() => errorEl.classList.remove('visible'), 6000); }
 function hideError()     { errorEl.classList.remove('visible'); }
 
+function updatePresetButtonLabels() {
+  btnBg.textContent = `${t('btnBackground')}: ${BACKGROUND_PRESETS[backgroundPresetIndex].name}`;
+  btnLight.textContent = `${t('btnLight')}: ${LIGHT_PRESETS[lightPresetIndex].name}`;
+}
+
+function applyBackgroundPreset() {
+  const preset = BACKGROUND_PRESETS[backgroundPresetIndex];
+  if (!scene) return;
+  scene.clearColor = preset.color;
+  skyboxOn = preset.skybox;
+  if (skyboxMesh) skyboxMesh.setEnabled(false);
+  btnBg.classList.remove('active');
+  updatePresetButtonLabels();
+}
+
+function applyLightPreset() {
+  const preset = LIGHT_PRESETS[lightPresetIndex];
+  if (!hemisphericLight || !directionalLight) return;
+  hemisphericLight.intensity = preset.hemi;
+  directionalLight.direction.copyFrom(preset.direction);
+  directionalLight.position = preset.direction.scale(-20);
+  directionalLight.intensity = preset.intensity;
+  updatePresetButtonLabels();
+}
+
 /* ─────────────────────────────────────────────
    Toolbar
 ───────────────────────────────────────────── */
@@ -1143,6 +1247,8 @@ btnReset.addEventListener('click', () => {
   if (currentMeshes.length) fitCamera(currentMeshes);
 });
 
+btnScale.addEventListener('click', () => scaleModelToViewer());
+
 document.getElementById('btn-wireframe').addEventListener('click', () => {
   wireframeOn = !wireframeOn;
   btnWireframe.classList.toggle('active', wireframeOn);
@@ -1150,10 +1256,13 @@ document.getElementById('btn-wireframe').addEventListener('click', () => {
 });
 
 btnBg.addEventListener('click', () => {
-  skyboxOn = !skyboxOn;
-  btnBg.classList.toggle('active', skyboxOn);
-  if (skyboxMesh) skyboxMesh.setEnabled(skyboxOn);
-  scene.clearColor = skyboxOn ? new Color4(0.55, 0.72, 0.95, 1) : new Color4(0.14, 0.14, 0.18, 1);
+  backgroundPresetIndex = (backgroundPresetIndex + 1) % BACKGROUND_PRESETS.length;
+  applyBackgroundPreset();
+});
+
+btnLight.addEventListener('click', () => {
+  lightPresetIndex = (lightPresetIndex + 1) % LIGHT_PRESETS.length;
+  applyLightPreset();
 });
 
 btnGrid.addEventListener('click', () => {
@@ -1188,18 +1297,55 @@ btnShadow.addEventListener('click', (e) => {
   }
 });
 
-function rotateFBXModel(axis) {
-  if (!fbxAnimationState) return;
-  if (axis === 'x') fbxAnimationState.rotationX = (fbxAnimationState.rotationX + 1) % 4;
-  if (axis === 'z') fbxAnimationState.rotationZ = (fbxAnimationState.rotationZ + 1) % 4;
-  syncFBXModel();
+function placeModelOnGround() {
+  const bounds = getModelBounds(currentMeshes);
+  if (!bounds) return;
+
+  const offsetX = -bounds.center.x;
+  const offsetY = -bounds.min.y;
+  const offsetZ = -bounds.center.z;
+  if (fbxAnimationState) {
+    fbxAnimationState.translationX += offsetX;
+    fbxAnimationState.translationY += offsetY;
+    fbxAnimationState.translationZ += offsetZ;
+    syncFBXModel();
+  } else if (modelTransformRoot) {
+    modelTransformRoot.position.addInPlace(new Vector3(offsetX, offsetY, offsetZ));
+  }
+}
+
+function settleModelOnGrid() {
+  placeModelOnGround();
   fitCamera(currentMeshes);
   adjustGrid(currentMeshes);
   updateLocalAxes(currentMeshes);
 }
 
-btnFixX.addEventListener('click', () => rotateFBXModel('x'));
-btnFixZ.addEventListener('click', () => rotateFBXModel('z'));
+function rotateModel(axis) {
+  if (!currentMeshes.length) return;
+
+  if (fbxAnimationState) {
+    const key = axis === 'x' ? 'rotationX' : axis === 'y' ? 'rotationY' : 'rotationZ';
+    fbxAnimationState[key] = (fbxAnimationState[key] + 1) % 4;
+    syncFBXModel();
+  } else if (modelTransformRoot) {
+    const rotationAxis = axis === 'x'
+      ? new Vector3(1, 0, 0)
+      : axis === 'y' ? new Vector3(0, 1, 0) : new Vector3(0, 0, 1);
+    modelTransformRoot.rotate(rotationAxis, Math.PI / 2, Space.WORLD);
+  }
+
+  settleModelOnGrid();
+}
+
+function scaleModelToViewer() {
+  // Camera fitting gives a consistent on-screen size without changing model or skeleton geometry.
+  settleModelOnGrid();
+}
+
+btnFixX.addEventListener('click', () => rotateModel('x'));
+btnFixY.addEventListener('click', () => rotateModel('y'));
+btnFixZ.addEventListener('click', () => rotateModel('z'));
 
 /* ─────────────────────────────────────────────
    IPC from Electron menu
@@ -1212,10 +1358,8 @@ window.electronAPI.onToggleWireframe(() => {
   applyWireframe(wireframeOn);
 });
 window.electronAPI.onToggleBackground(() => {
-  skyboxOn = !skyboxOn;
-  btnBg.classList.toggle('active', skyboxOn);
-  if (skyboxMesh) skyboxMesh.setEnabled(skyboxOn);
-  scene.clearColor = skyboxOn ? new Color4(0.55, 0.72, 0.95, 1) : new Color4(0.14, 0.14, 0.18, 1);
+  backgroundPresetIndex = (backgroundPresetIndex + 1) % BACKGROUND_PRESETS.length;
+  applyBackgroundPreset();
 });
 
 /* ─────────────────────────────────────────────
@@ -1239,5 +1383,10 @@ document.addEventListener('drop', e => {
     showError(`${t('unsupportedFormat')} .${ext} (${t('supportedFormats')})`);
     return;
   }
-  loadModel(file.path);
+  const filePath = window.electronAPI.getPathForFile(file);
+  if (!filePath) {
+    showError(t('loadFailedPrefix') + 'missing local file path');
+    return;
+  }
+  loadModel(filePath);
 });
