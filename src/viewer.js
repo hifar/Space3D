@@ -95,6 +95,7 @@ let worldAxisRoot    = null;
 let localAxisRoot    = null;
 let currentLanguage  = 'en';
 let fileLabelIsDefault = true;
+let fbxAnimationState = null;
 
 const CAMERA_DEFAULT_ALPHA = Math.PI / 2;
 const CAMERA_DEFAULT_BETA = Math.PI / 3;
@@ -133,7 +134,6 @@ const i18n = {
     unsupportedFormat: 'Unsupported format:',
     supportedFormats: 'Supported: GLB GLTF OBJ FBX STL PLY',
     unnamedAnimation: 'Animation',
-    fbxAnimationNote: '(FBX animation requires conversion)',
   },
   zh: {
     btnOpen: '📂 打开文件',
@@ -163,7 +163,6 @@ const i18n = {
     unsupportedFormat: '不支持的格式:',
     supportedFormats: '支持: GLB GLTF OBJ FBX STL PLY',
     unnamedAnimation: '动画',
-    fbxAnimationNote: '(FBX动画需转换)',
   },
 };
 
@@ -346,7 +345,10 @@ initLanguage();
 btnBg.classList.add('active');
 btnGrid.classList.add('active');
 btnAxis.classList.add('active');
-engine.runRenderLoop(() => { if (scene) scene.render(); });
+engine.runRenderLoop(() => {
+  updateFBXAnimation();
+  if (scene) scene.render();
+});
 window.addEventListener('resize', () => engine.resize());
 
 langSelectEl.addEventListener('change', async () => {
@@ -405,6 +407,7 @@ async function loadModel(filePath) {
 
   currentMeshes.forEach(m => m.dispose && m.dispose());
   currentMeshes = [];
+  fbxAnimationState = null;
   if (localAxisRoot) localAxisRoot.setEnabled(false);
   clearAnimControls();
 
@@ -490,16 +493,16 @@ function loadFBX(filePath) {
 
           // Collect mesh nodes first; traverse is sync so we can't await inside it.
           const meshNodes = [];
+          const bones = [];
           fbxObj.traverse((child) => {
             if (child instanceof THREE.Mesh) meshNodes.push(child);
+            if (child instanceof THREE.Bone) bones.push(child);
           });
+          const animatedMeshes = [];
 
           for (const child of meshNodes) {
             const geom = child.geometry?.clone();
             if (!geom) continue;
-
-            // Bake world transform (includes FBX Z-up→Y-up correction at root).
-            geom.applyMatrix4(child.matrixWorld);
 
             const posAttr = geom.getAttribute('position');
             if (!posAttr || posAttr.count === 0) continue;
@@ -507,13 +510,7 @@ function loadFBX(filePath) {
             // ── Coordinate system fix ────────────────────────────────────────
             // Three.js is right-handed; Babylon.js is left-handed.
             // Negate Z on positions so geometry ends up in Babylon world space.
-            const rawPos = posAttr.array;
-            const positions = new Array(rawPos.length);
-            for (let i = 0; i < rawPos.length; i += 3) {
-              positions[i]     =  rawPos[i];
-              positions[i + 1] =  rawPos[i + 1];
-              positions[i + 2] = -rawPos[i + 2];
-            }
+            const positions = getFBXMeshPositions(child, posAttr);
 
             // Recompute normals AFTER position flip so they point the right way.
             geom.computeVertexNormals();
@@ -555,7 +552,7 @@ function loadFBX(filePath) {
             if (normals.length) vertexData.normals = normals;
             if (uvs.length)     vertexData.uvs = uvs;
             vertexData.indices = indices;
-            vertexData.applyToMesh(babylonMesh);
+            vertexData.applyToMesh(babylonMesh, true);
 
             const mat = new StandardMaterial('fbx_mat_' + meshCount, scene);
             const threeMat = Array.isArray(child.material) ? child.material[0] : child.material;
@@ -567,10 +564,14 @@ function loadFBX(filePath) {
             babylonMesh.receiveShadows = true;
 
             currentMeshes.push(babylonMesh);
+            animatedMeshes.push({ source: child, target: babylonMesh, positionAttribute: posAttr });
             totalVerts += posAttr.count;
             meshCount++;
             matCount++;
           }
+
+          const skeletonHelper = meshCount === 0 && bones.length > 0 ? createFBXSkeletonHelper(bones) : null;
+          if (skeletonHelper) currentMeshes.push(skeletonHelper);
 
           fitCamera(currentMeshes);
           adjustGrid(currentMeshes);
@@ -579,10 +580,15 @@ function loadFBX(filePath) {
           infoMeshes.textContent     = meshCount;
           infoVertices.textContent   = totalVerts.toLocaleString();
           infoMaterials.textContent  = matCount;
-          infoAnimations.textContent = (fbxObj.animations && fbxObj.animations.length) || 0;
+          const clips = fbxObj.animations || [];
+          infoAnimations.textContent = clips.length;
 
-          if (fbxObj.animations && fbxObj.animations.length > 0) {
-            infoAnimations.textContent = `${fbxObj.animations.length} ${t('fbxAnimationNote')}`;
+          if (clips.length > 0) {
+            const mixer = new THREE.AnimationMixer(fbxObj);
+            const actions = clips.map(clip => mixer.clipAction(clip));
+            fbxAnimationState = { mixer, animatedMeshes, skeletonHelper, bones };
+            buildFBXAnimControls(actions);
+            actions[0].play();
           }
 
           resolve();
@@ -594,6 +600,75 @@ function loadFBX(filePath) {
       reject
     );
   });
+}
+
+function getFBXMeshPositions(source, positionAttribute) {
+  const sourcePosition = new THREE.Vector3();
+  const worldPosition = new THREE.Vector3();
+  const positions = new Array(positionAttribute.count * 3);
+
+  for (let index = 0; index < positionAttribute.count; index++) {
+    sourcePosition.fromBufferAttribute(positionAttribute, index);
+    if (source.isSkinnedMesh) {
+      source.applyBoneTransform(index, worldPosition.copy(sourcePosition));
+      source.localToWorld(worldPosition);
+    } else {
+      source.localToWorld(worldPosition.copy(sourcePosition));
+    }
+    const offset = index * 3;
+    positions[offset] = worldPosition.x;
+    positions[offset + 1] = worldPosition.y;
+    positions[offset + 2] = -worldPosition.z;
+  }
+
+  return positions;
+}
+
+function getFBXSkeletonLines(bones) {
+  const lines = [];
+  const start = new THREE.Vector3();
+  const end = new THREE.Vector3();
+  bones.forEach(bone => {
+    if (!(bone.parent instanceof THREE.Bone)) return;
+    bone.getWorldPosition(end);
+    bone.parent.getWorldPosition(start);
+    lines.push([
+      new Vector3(start.x, start.y, -start.z),
+      new Vector3(end.x, end.y, -end.z),
+    ]);
+  });
+  return lines;
+}
+
+function createFBXSkeletonHelper(bones) {
+  const helper = MeshBuilder.CreateLineSystem('fbx_skeleton_helper', {
+    lines: getFBXSkeletonLines(bones),
+    updatable: true,
+  }, scene);
+  helper.color = new Color3(1, 0.7, 0.15);
+  helper.isPickable = false;
+  helper.alwaysSelectAsActiveMesh = true;
+  return helper;
+}
+
+function updateFBXAnimation() {
+  if (!fbxAnimationState || !scene) return;
+
+  const { mixer, animatedMeshes, skeletonHelper, bones } = fbxAnimationState;
+  mixer.update(engine.getDeltaTime() / 1000);
+
+  animatedMeshes.forEach(({ source, target, positionAttribute }) => {
+    target.updateVerticesData('position', getFBXMeshPositions(source, positionAttribute));
+    target.refreshBoundingInfo();
+  });
+
+  if (skeletonHelper) {
+    MeshBuilder.CreateLineSystem('fbx_skeleton_helper', {
+      lines: getFBXSkeletonLines(bones),
+      instance: skeletonHelper,
+    }, scene);
+    skeletonHelper.refreshBoundingInfo();
+  }
 }
 
 // Fetch a blob: or file: URL and convert it to a base64 data: URL via FileReader.
@@ -896,6 +971,40 @@ function buildAnimControls(groups) {
         btn.dataset.playing = '0';
       } else {
         g.start(true);
+        btn.textContent = '⏸';
+        btn.dataset.playing = '1';
+      }
+    });
+
+    row.append(lbl, btn);
+    animControls.appendChild(row);
+  });
+}
+
+function buildFBXAnimControls(actions) {
+  animControls.innerHTML = '';
+  actions.forEach((action, index) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+    const lbl = document.createElement('span');
+    lbl.textContent = action.getClip().name || `${t('unnamedAnimation')} ${index + 1}`;
+    lbl.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#aaa;';
+
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.style.cssText = 'padding:3px 8px;font-size:11px;';
+    btn.textContent = index === 0 ? '⏸' : '▶';
+    btn.dataset.playing = index === 0 ? '1' : '0';
+
+    btn.addEventListener('click', () => {
+      if (btn.dataset.playing === '1') {
+        action.paused = true;
+        btn.textContent = '▶';
+        btn.dataset.playing = '0';
+      } else {
+        action.paused = false;
+        action.play();
         btn.textContent = '⏸';
         btn.dataset.playing = '1';
       }
