@@ -12,7 +12,7 @@
 import {
   Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight,
   ShadowGenerator, Vector3, Color3, Color4, MeshBuilder, VertexData,
-  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport,
+  StandardMaterial, Mesh, TransformNode, FreeCamera, Viewport, Quaternion,
 } from '@babylonjs/core';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture';
 
@@ -48,6 +48,8 @@ const btnBg         = document.getElementById('btn-bg');
 const btnGrid       = document.getElementById('btn-grid');
 const btnAxis       = document.getElementById('btn-axis');
 const btnShadow     = document.getElementById('btn-shadow');
+const btnFixX       = document.getElementById('btn-fix-x');
+const btnFixZ       = document.getElementById('btn-fix-z');
 
 const welcomeSubtitleEl = document.getElementById('welcome-subtitle');
 const welcomeFormatsEl = document.getElementById('welcome-formats');
@@ -114,6 +116,8 @@ const i18n = {
     btnGrid: '⊞ Grid',
     btnAxis: '⟂ Axis',
     btnShadows: '☀ Shadows',
+    btnFixX: '↻ X',
+    btnFixZ: '↻ Z',
     fileHint: 'Drop a file here or click Open',
     welcomeSubtitle: 'Drop a 3D model here, or click Open in the toolbar',
     welcomeFormats: 'Supported formats: GLB · GLTF · OBJ · FBX · STL · PLY',
@@ -143,6 +147,8 @@ const i18n = {
     btnGrid: '⊞ 网格',
     btnAxis: '⟂ 坐标轴',
     btnShadows: '☀ 阴影',
+    btnFixX: '↻ X轴',
+    btnFixZ: '↻ Z轴',
     fileHint: '拖拽文件到窗口或点击"打开文件"',
     welcomeSubtitle: '拖拽3D模型文件到此处，或点击工具栏"打开文件"',
     welcomeFormats: '支持格式：GLB · GLTF · OBJ · FBX · STL · PLY',
@@ -183,6 +189,8 @@ function applyLanguage(lang) {
   btnGrid.textContent = t('btnGrid');
   btnAxis.textContent = t('btnAxis');
   btnShadow.textContent = t('btnShadows');
+  btnFixX.textContent = t('btnFixX');
+  btnFixZ.textContent = t('btnFixZ');
 
   if (fileLabelIsDefault) fileLabelEl.textContent = t('fileHint');
   welcomeSubtitleEl.textContent = t('welcomeSubtitle');
@@ -571,7 +579,7 @@ function loadFBX(filePath) {
           }
 
           const skeletonHelper = meshCount === 0 && bones.length > 0 ? createFBXSkeletonHelper(bones) : null;
-          if (skeletonHelper) currentMeshes.push(skeletonHelper);
+          if (skeletonHelper) currentMeshes.push(...skeletonHelper.meshes);
 
           fitCamera(currentMeshes);
           adjustGrid(currentMeshes);
@@ -583,10 +591,20 @@ function loadFBX(filePath) {
           const clips = fbxObj.animations || [];
           infoAnimations.textContent = clips.length;
 
+          const modelBounds = getModelBounds(currentMeshes);
+          fbxAnimationState = {
+            mixer: clips.length > 0 ? new THREE.AnimationMixer(fbxObj) : null,
+            animatedMeshes,
+            skeletonHelper,
+            bones,
+            center: modelBounds?.center || Vector3.Zero(),
+            rotationX: 0,
+            rotationZ: 0,
+          };
+
           if (clips.length > 0) {
-            const mixer = new THREE.AnimationMixer(fbxObj);
+            const mixer = fbxAnimationState.mixer;
             const actions = clips.map(clip => mixer.clipAction(clip));
-            fbxAnimationState = { mixer, animatedMeshes, skeletonHelper, bones };
             buildFBXAnimControls(actions);
             actions[0].play();
           }
@@ -616,59 +634,117 @@ function getFBXMeshPositions(source, positionAttribute) {
       source.localToWorld(worldPosition.copy(sourcePosition));
     }
     const offset = index * 3;
-    positions[offset] = worldPosition.x;
-    positions[offset + 1] = worldPosition.y;
-    positions[offset + 2] = -worldPosition.z;
+    const corrected = correctFBXPoint(worldPosition.x, worldPosition.y, -worldPosition.z);
+    positions[offset] = corrected.x;
+    positions[offset + 1] = corrected.y;
+    positions[offset + 2] = corrected.z;
   }
 
   return positions;
 }
 
-function getFBXSkeletonLines(bones) {
-  const lines = [];
+function getFBXSkeletonSegments(bones) {
+  const segments = [];
   const start = new THREE.Vector3();
   const end = new THREE.Vector3();
   bones.forEach(bone => {
     if (!(bone.parent instanceof THREE.Bone)) return;
     bone.getWorldPosition(end);
     bone.parent.getWorldPosition(start);
-    lines.push([
-      new Vector3(start.x, start.y, -start.z),
-      new Vector3(end.x, end.y, -end.z),
-    ]);
+    segments.push({
+      start: correctFBXPoint(start.x, start.y, -start.z),
+      end: correctFBXPoint(end.x, end.y, -end.z),
+    });
   });
-  return lines;
+  return segments;
 }
 
 function createFBXSkeletonHelper(bones) {
-  const helper = MeshBuilder.CreateLineSystem('fbx_skeleton_helper', {
-    lines: getFBXSkeletonLines(bones),
-    updatable: true,
-  }, scene);
-  helper.color = new Color3(1, 0.7, 0.15);
-  helper.isPickable = false;
-  helper.alwaysSelectAsActiveMesh = true;
+  const segments = getFBXSkeletonSegments(bones);
+  const averageLength = segments.reduce((sum, segment) => sum + Vector3.Distance(segment.start, segment.end), 0) / segments.length;
+  const radius = Math.max(averageLength * 0.09, 0.015);
+  const visuals = segments.map((segment, index) => {
+    const bone = MeshBuilder.CreateCylinder(`fbx_bone_${index}`, {
+      height: 1,
+      diameter: radius * 2,
+      tessellation: 8,
+    }, scene);
+    const joint = MeshBuilder.CreateSphere(`fbx_joint_${index}`, {
+      diameter: radius * 2.5,
+      segments: 8,
+    }, scene);
+    const material = new StandardMaterial(`fbx_bone_mat_${index}`, scene);
+    material.specularColor = new Color3(0.15, 0.15, 0.15);
+    bone.material = material;
+    joint.material = material;
+    bone.isPickable = joint.isPickable = false;
+    bone.alwaysSelectAsActiveMesh = joint.alwaysSelectAsActiveMesh = true;
+    return { bone, joint, material };
+  });
+  const helper = { visuals, meshes: visuals.flatMap(visual => [visual.bone, visual.joint]) };
+  updateFBXSkeletonHelper(helper, bones);
   return helper;
 }
 
 function updateFBXAnimation() {
-  if (!fbxAnimationState || !scene) return;
+  if (!fbxAnimationState?.mixer || !scene) return;
 
-  const { mixer, animatedMeshes, skeletonHelper, bones } = fbxAnimationState;
+  const { mixer } = fbxAnimationState;
   mixer.update(engine.getDeltaTime() / 1000);
+
+  syncFBXModel();
+}
+
+function syncFBXModel() {
+  if (!fbxAnimationState || !scene) return;
+  const { animatedMeshes, skeletonHelper, bones } = fbxAnimationState;
 
   animatedMeshes.forEach(({ source, target, positionAttribute }) => {
     target.updateVerticesData('position', getFBXMeshPositions(source, positionAttribute));
     target.refreshBoundingInfo();
   });
 
-  if (skeletonHelper) {
-    MeshBuilder.CreateLineSystem('fbx_skeleton_helper', {
-      lines: getFBXSkeletonLines(bones),
-      instance: skeletonHelper,
-    }, scene);
-    skeletonHelper.refreshBoundingInfo();
+  if (skeletonHelper) updateFBXSkeletonHelper(skeletonHelper, bones);
+}
+
+function correctFBXPoint(x, y, z) {
+  if (!fbxAnimationState) return new Vector3(x, y, z);
+  const center = fbxAnimationState.center;
+  let correctedX = x - center.x;
+  let correctedY = y - center.y;
+  let correctedZ = z - center.z;
+
+  for (let step = 0; step < fbxAnimationState.rotationX; step++) {
+    [correctedY, correctedZ] = [-correctedZ, correctedY];
   }
+  for (let step = 0; step < fbxAnimationState.rotationZ; step++) {
+    [correctedX, correctedY] = [-correctedY, correctedX];
+  }
+  return new Vector3(correctedX + center.x, correctedY + center.y, correctedZ + center.z);
+}
+
+function updateFBXSkeletonHelper(helper, bones) {
+  const segments = getFBXSkeletonSegments(bones);
+  const center = fbxAnimationState?.center || Vector3.Zero();
+  const depthScale = Math.max(...segments.map(segment => Math.abs(segment.start.z - center.z)), 1);
+  segments.forEach((segment, index) => {
+    const visual = helper.visuals[index];
+    if (!visual) return;
+    const direction = segment.end.subtract(segment.start);
+    const length = direction.length();
+    if (length < 1e-6) return;
+
+    visual.bone.position.copyFrom(Vector3.Center(segment.start, segment.end));
+    visual.bone.scaling.y = length;
+    visual.bone.rotationQuaternion = visual.bone.rotationQuaternion || Quaternion.Identity();
+    Quaternion.FromUnitVectorsToRef(Vector3.Up(), direction.scale(1 / length), visual.bone.rotationQuaternion);
+    visual.joint.position.copyFrom(segment.end);
+
+    const depth = Math.max(-1, Math.min(1, (visual.bone.position.z - center.z) / depthScale));
+    visual.material.diffuseColor = depth >= 0
+      ? new Color3(0.95, 0.32 + depth * 0.2, 0.1)
+      : new Color3(0.1, 0.38 - depth * 0.12, 0.95);
+  });
 }
 
 // Fetch a blob: or file: URL and convert it to a base64 data: URL via FileReader.
@@ -1082,6 +1158,19 @@ btnShadow.addEventListener('click', (e) => {
     btn.classList.remove('active');
   }
 });
+
+function rotateFBXModel(axis) {
+  if (!fbxAnimationState) return;
+  if (axis === 'x') fbxAnimationState.rotationX = (fbxAnimationState.rotationX + 1) % 4;
+  if (axis === 'z') fbxAnimationState.rotationZ = (fbxAnimationState.rotationZ + 1) % 4;
+  syncFBXModel();
+  fitCamera(currentMeshes);
+  adjustGrid(currentMeshes);
+  updateLocalAxes(currentMeshes);
+}
+
+btnFixX.addEventListener('click', () => rotateFBXModel('x'));
+btnFixZ.addEventListener('click', () => rotateFBXModel('z'));
 
 /* ─────────────────────────────────────────────
    IPC from Electron menu
