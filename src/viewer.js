@@ -92,6 +92,7 @@ let gridOn           = true;
 let axisOn           = true;
 let shadowGenerator  = null;
 let gridMesh         = null;
+let shadowGround     = null;
 let skyboxMesh       = null;
 let worldAxisRoot    = null;
 let localAxisRoot    = null;
@@ -273,8 +274,17 @@ function createScene() {
   gridMat.lineColor = new Color3(0.2, 0.4, 0.8);
   gridMat.opacity = 0.6;
   gridMesh.material = gridMat;
-  gridMesh.receiveShadows = true;
   gridMesh.setEnabled(gridOn);
+
+  shadowGround = MeshBuilder.CreateGround('shadowGround', { width: 20, height: 20 }, scene);
+  const shadowGroundMat = new StandardMaterial('shadowGroundMat', scene);
+  shadowGroundMat.diffuseColor = new Color3(0.45, 0.62, 0.85);
+  shadowGroundMat.specularColor = Color3.Black();
+  shadowGroundMat.alpha = 0.42;
+  shadowGround.material = shadowGroundMat;
+  shadowGround.receiveShadows = true;
+  shadowGround.isPickable = false;
+  shadowGround.setEnabled(gridOn);
 
   scene.onBeforeRenderObservable.add(syncWorldGizmoCamera);
 
@@ -456,7 +466,7 @@ async function loadBabylon(filePath, fileName, ext) {
   currentMeshes.forEach(m => {
     if (m.getTotalVertices && m.getTotalVertices() > 0) {
       shadowGenerator.addShadowCaster(m, true);
-      m.receiveShadows = true;
+      m.receiveShadows = false;
     }
   });
 
@@ -569,7 +579,7 @@ function loadFBX(filePath) {
             babylonMesh.material.wireframe = wireframeOn;
 
             shadowGenerator.addShadowCaster(babylonMesh, true);
-            babylonMesh.receiveShadows = true;
+            babylonMesh.receiveShadows = false;
 
             currentMeshes.push(babylonMesh);
             animatedMeshes.push({ source: child, target: babylonMesh, positionAttribute: posAttr });
@@ -929,7 +939,7 @@ function loadPLY(filePath) {
 
           babylonMesh.material = mat;
           babylonMesh.material.wireframe = wireframeOn;
-          babylonMesh.receiveShadows = !!indexAttr;
+          babylonMesh.receiveShadows = false;
           if (indexAttr) {
             shadowGenerator.addShadowCaster(babylonMesh, true);
           }
@@ -983,7 +993,7 @@ function fitCamera(meshes) {
    Grid adjustment
 ───────────────────────────────────────────── */
 function adjustGrid(meshes) {
-  if (!gridMesh) return;
+  if (!gridMesh || !shadowGround) return;
   const bounds = getModelBounds(meshes);
   if (!bounds) return;
 
@@ -993,6 +1003,8 @@ function adjustGrid(meshes) {
   gridMesh.position.y = Math.min(bounds.min.y - epsilon, 0);
   const scale = (maxXZ * 3) / 20;
   gridMesh.scaling.set(scale || 1, 1, scale || 1);
+  shadowGround.position.y = gridMesh.position.y - epsilon * 0.1;
+  shadowGround.scaling.copyFrom(gridMesh.scaling);
 }
 
 function updateLocalAxes(meshes) {
@@ -1026,6 +1038,7 @@ function applyWireframe(on) {
 ───────────────────────────────────────────── */
 function buildAnimControls(groups) {
   animControls.innerHTML = '';
+  const buttons = [];
   groups.forEach((g, i) => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:6px;';
@@ -1046,12 +1059,19 @@ function buildAnimControls(groups) {
         btn.textContent = '▶';
         btn.dataset.playing = '0';
       } else {
-        g.start(true);
+        groups.forEach((other, otherIndex) => {
+          if (otherIndex === i) return;
+          other.stop();
+          buttons[otherIndex].textContent = '▶';
+          buttons[otherIndex].dataset.playing = '0';
+        });
+        g.play(true);
         btn.textContent = '⏸';
         btn.dataset.playing = '1';
       }
     });
 
+    buttons.push(btn);
     row.append(lbl, btn);
     animControls.appendChild(row);
   });
@@ -1059,6 +1079,7 @@ function buildAnimControls(groups) {
 
 function buildFBXAnimControls(actions) {
   animControls.innerHTML = '';
+  const buttons = [];
   actions.forEach((action, index) => {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:6px;';
@@ -1079,6 +1100,12 @@ function buildFBXAnimControls(actions) {
         btn.textContent = '▶';
         btn.dataset.playing = '0';
       } else {
+        actions.forEach((other, otherIndex) => {
+          if (otherIndex === index) return;
+          other.stop();
+          buttons[otherIndex].textContent = '▶';
+          buttons[otherIndex].dataset.playing = '0';
+        });
         action.paused = false;
         action.play();
         btn.textContent = '⏸';
@@ -1086,6 +1113,7 @@ function buildFBXAnimControls(actions) {
       }
     });
 
+    buttons.push(btn);
     row.append(lbl, btn);
     animControls.appendChild(row);
   });
@@ -1132,6 +1160,7 @@ btnGrid.addEventListener('click', () => {
   gridOn = !gridOn;
   btnGrid.classList.toggle('active', gridOn);
   if (gridMesh) gridMesh.setEnabled(gridOn);
+  if (shadowGround) shadowGround.setEnabled(gridOn);
 });
 
 btnAxis.addEventListener('click', () => {
